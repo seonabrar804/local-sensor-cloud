@@ -1,0 +1,15 @@
+server/data/
+server/tls/server-key.pem
+server/keys/application-aes.key
+android/app/src/main/res/raw/application_aes_key.bin
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/work/
+android/work*/
+LocalSensorCloud-debug.apk
+.DS_Store
+*.pcap
+*.pcapng
+*.log

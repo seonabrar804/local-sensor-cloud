@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Local Sensor Cloud</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">PRIVATE · LOCAL WI-FI</p>
+        <h1>Local Sensor Cloud</h1>
+      </div>
+      <div class="connection"><span id="connectionDot"></span><span id="connectionLabel">Waiting for phone</span></div>
+    </header>
+
+    <main>
+      <section class="toolbar panel">
+        <label for="deviceSelect">Streaming device</label>
+        <select id="deviceSelect"><option value="">No device connected</option></select>
+        <div class="last-seen">Last packet <strong id="lastSeen">—</strong></div>
+      </section>
+
+      <section class="overview">
+        <article class="camera panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">BACK CAMERA</p><h2 id="backCameraTitle">Waiting for frames</h2></div>
+            <span id="backFrameRate" class="tag">0 fps</span>
+          </div>
+          <div class="camera-stage">
+            <img id="backVideoStream" alt="Live phone back-camera stream">
+            <div id="backCameraEmpty" class="empty-state">Waiting for the back camera</div>
+          </div>
+        </article>
+
+        <article class="camera panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">FRONT CAMERA</p><h2 id="frontCameraTitle">Waiting for frames</h2></div>
+            <span id="frontFrameRate" class="tag">0 fps</span>
+          </div>
+          <div class="camera-stage">
+            <img id="frontVideoStream" alt="Live phone front-camera stream">
+            <div id="frontCameraEmpty" class="empty-state">Waiting for the front camera</div>
+          </div>
+        </article>
+
+        <article class="sound panel">
+          <div class="panel-heading"><div><p class="eyebrow">MICROPHONE</p><h2>Noise level</h2></div><span class="tag">dBFS</span></div>
+          <div class="sound-value"><strong id="noiseValue">—</strong><small>dBFS</small></div>
+          <canvas id="noiseChart" aria-label="Noise level history"></canvas>
+          <div class="chart-scale"><span>-90 quiet</span><span>0 loud</span></div>
+        </article>
+      </section>
+
+      <section class="metrics">
+        <article class="metric panel"><span>Pressure</span><strong id="pressureValue">—</strong><small>hPa</small></article>
+        <article class="metric panel"><span>Temperature</span><strong id="temperatureValue">—</strong><small>°C</small></article>
+        <article class="metric panel"><span>Light</span><strong id="lightValue">—</strong><small>lux</small></article>
+        <article class="metric panel"><span>Battery</span><strong id="batteryValue">—</strong><small>%</small></article>
+      </section>
+
+      <section class="panel sensor-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">ALL AVAILABLE HARDWARE</p><h2>Sensor measurements</h2></div>
+          <span id="sensorCount" class="tag">0 sensors</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Sensor</th><th>Type / unit</th><th>Current values</th><th>Accuracy</th></tr></thead>
+            <tbody id="sensorRows"><tr><td colspan="4" class="table-empty">No measurements received</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer>Data stays on this laptop. Telemetry is stored in <code>server/data/telemetry</code>; captured photos are in <code>server/data/photos</code>.</footer>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

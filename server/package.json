@@ -1,0 +1,14 @@
+{
+  "name": "local-sensor-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Laptop-hosted receiver and dashboard for the Local Sensor Cloud Android app",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
