@@ -1,19 +1,21 @@
 import http from 'node:http';
 import https from 'node:https';
-import { createDecipheriv } from 'node:crypto';
-import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
+import { appendFile, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PUBLIC_DIRECTORY = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const JSON_LIMIT = 1024 * 1024;
 const FRAME_LIMIT = 5 * 1024 * 1024;
+const PAIRING_LIMIT = 64 * 1024;
+const PAIRING_TTL_MS = 5 * 60 * 1000;
 const HISTORY_LIMIT = 600;
-const APPLICATION_ENCRYPTION_HEADER = 'aes-256-gcm-v1';
-const APPLICATION_ENCRYPTION_MAGIC = Buffer.from('LSC1');
+const APPLICATION_ENCRYPTION_HEADER = 'aes-256-gcm-v2';
+const APPLICATION_ENCRYPTION_MAGIC = Buffer.from('LSC2');
 const APPLICATION_IV_LENGTH = 12;
 const APPLICATION_TAG_LENGTH = 16;
-const APPLICATION_AAD_PREFIX = 'LocalSensorCloud AES-GCM v1\n';
+const APPLICATION_AAD_PREFIX = 'LocalSensorCloud AES-GCM v2\n';
 
 const CONTENT_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -34,12 +36,25 @@ function safeCamera(value) {
 function jsonResponse(response, status, value) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
-    'Access-Control-Allow-Origin': '*',
     'Cache-Control': 'no-store',
     'Content-Length': Buffer.byteLength(body),
     'Content-Type': 'application/json; charset=utf-8'
   });
   response.end(body);
+}
+
+function isLoopbackRequest(request) {
+  const address = request.socket?.remoteAddress || '';
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function pairingCode(certificate, clientNonce, requestId) {
+  const digest = createHash('sha256')
+    .update(certificate)
+    .update(clientNonce)
+    .update(requestId, 'utf8')
+    .digest();
+  return String(digest.readUInt32BE(0) % 1_000_000).padStart(6, '0');
 }
 
 async function readBody(request, limit) {
@@ -57,6 +72,16 @@ async function readBody(request, limit) {
   return Buffer.concat(chunks);
 }
 
+async function readJsonBody(request, limit) {
+  try {
+    return JSON.parse((await readBody(request, limit)).toString('utf8'));
+  } catch {
+    const error = new Error('Request body must be valid JSON');
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
 function isoFileTimestamp(date = new Date()) {
   return date.toISOString().replaceAll(':', '-').replaceAll('.', '-');
 }
@@ -69,19 +94,16 @@ export function createSensorCloudServer(options = {}) {
   const dataDirectory = path.resolve(options.dataDirectory || './data');
   const publicDirectory = path.resolve(options.publicDirectory || PUBLIC_DIRECTORY);
   const apkPath = options.apkPath ? path.resolve(options.apkPath) : null;
+  const pairingFile = options.pairingFile ? path.resolve(options.pairingFile) : null;
+  const serverCertificateDer = options.serverCertificateDer ? Buffer.from(options.serverCertificateDer) : null;
   const telemetryDirectory = path.join(dataDirectory, 'telemetry');
   const frameDirectory = path.join(dataDirectory, 'frames');
   const photoDirectory = path.join(dataDirectory, 'photos');
-  const applicationEncryptionKey = options.applicationEncryptionKey
-    ? Buffer.from(options.applicationEncryptionKey)
-    : null;
-  if (applicationEncryptionKey && applicationEncryptionKey.length !== 32) {
-    throw new Error('applicationEncryptionKey must contain exactly 32 bytes');
-  }
-
   const latest = new Map();
   const latestFrames = new Map();
   const histories = new Map();
+  const pairedDevices = new Map();
+  const pairingRequests = new Map();
   const sseClients = new Set();
   const mjpegClients = new Set();
   let receivedTelemetry = 0;
@@ -92,6 +114,48 @@ export function createSensorCloudServer(options = {}) {
     mkdir(frameDirectory, { recursive: true }),
     mkdir(photoDirectory, { recursive: true })
   ]);
+
+  const pairingsReady = (async () => {
+    if (!pairingFile) return;
+    try {
+      const stored = JSON.parse(await readFile(pairingFile, 'utf8'));
+      for (const value of Array.isArray(stored.devices) ? stored.devices : []) {
+        const deviceId = safeDeviceId(value.deviceId);
+        const key = Buffer.from(String(value.applicationKey || ''), 'base64');
+        if (key.length !== 32) continue;
+        pairedDevices.set(deviceId, {
+          applicationKey: key,
+          approvedAt: value.approvedAt,
+          deviceId,
+          deviceName: String(value.deviceName || deviceId).slice(0, 160)
+        });
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  })();
+
+  async function persistPairings() {
+    if (!pairingFile) return;
+    const devices = [...pairedDevices.values()].map(value => ({
+      applicationKey: value.applicationKey.toString('base64'),
+      approvedAt: value.approvedAt,
+      deviceId: value.deviceId,
+      deviceName: value.deviceName
+    }));
+    await mkdir(path.dirname(pairingFile), { recursive: true });
+    const temporaryPath = `${pairingFile}.${process.pid}.tmp`;
+    await writeFile(temporaryPath, `${JSON.stringify({ devices }, null, 2)}\n`, { mode: 0o600 });
+    await rename(temporaryPath, pairingFile);
+    await chmod(pairingFile, 0o600).catch(() => {});
+  }
+
+  function cleanPairingRequests() {
+    const now = Date.now();
+    for (const [requestId, value] of pairingRequests) {
+      if (value.expiresAt <= now) pairingRequests.delete(requestId);
+    }
+  }
 
   function emitSse(event, deviceId, value) {
     for (const client of sseClients) {
@@ -114,9 +178,15 @@ export function createSensorCloudServer(options = {}) {
   }
 
   function decryptApplicationPayload(request, encryptedBody) {
-    if (!applicationEncryptionKey) return encryptedBody;
+    const deviceId = safeDeviceId(request.headers['x-sensor-device-id']);
+    const pairing = pairedDevices.get(deviceId);
+    if (!pairing) {
+      const error = new Error('This phone is not approved. Pair it from the laptop dashboard first.');
+      error.statusCode = 401;
+      throw error;
+    }
     if (request.headers['x-sensor-encryption'] !== APPLICATION_ENCRYPTION_HEADER) {
-      const error = new Error('AES-256-GCM application encryption is required');
+      const error = new Error('Paired AES-GCM application encryption is required');
       error.statusCode = 415;
       throw error;
     }
@@ -135,8 +205,8 @@ export function createSensorCloudServer(options = {}) {
     const ciphertext = encryptedBody.subarray(ciphertextStart, tagStart);
     const authenticationTag = encryptedBody.subarray(tagStart);
     try {
-      const decipher = createDecipheriv('aes-256-gcm', applicationEncryptionKey, iv);
-      decipher.setAAD(Buffer.from(APPLICATION_AAD_PREFIX + (request.url || '/'), 'utf8'));
+      const decipher = createDecipheriv('aes-256-gcm', pairing.applicationKey, iv);
+      decipher.setAAD(Buffer.from(`${APPLICATION_AAD_PREFIX}${deviceId}\n${request.url || '/'}`, 'utf8'));
       decipher.setAuthTag(authenticationTag);
       return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     } catch {
@@ -147,6 +217,7 @@ export function createSensorCloudServer(options = {}) {
   }
 
   async function handleTelemetry(request, response) {
+    await pairingsReady;
     const encryptedBody = await readBody(request, JSON_LIMIT + 64);
     const body = decryptApplicationPayload(request, encryptedBody);
     let payload;
@@ -157,6 +228,11 @@ export function createSensorCloudServer(options = {}) {
     }
     if (!payload || typeof payload !== 'object' || !payload.deviceId) {
       return jsonResponse(response, 400, { error: 'deviceId is required' });
+    }
+
+    const authenticatedDeviceId = safeDeviceId(request.headers['x-sensor-device-id']);
+    if (safeDeviceId(payload.deviceId) !== authenticatedDeviceId) {
+      return jsonResponse(response, 403, { error: 'Encrypted device identity does not match the upload header' });
     }
 
     await ready;
@@ -177,6 +253,7 @@ export function createSensorCloudServer(options = {}) {
   }
 
   async function handleFrame(request, response, url) {
+    await pairingsReady;
     const encryptedBody = await readBody(request, FRAME_LIMIT + 64);
     const frame = decryptApplicationPayload(request, encryptedBody);
     if (frame.length < 4 || frame[0] !== 0xff || frame[1] !== 0xd8) {
@@ -185,6 +262,9 @@ export function createSensorCloudServer(options = {}) {
 
     await ready;
     const deviceId = safeDeviceId(url.searchParams.get('deviceId'));
+    if (deviceId !== safeDeviceId(request.headers['x-sensor-device-id'])) {
+      return jsonResponse(response, 403, { error: 'Encrypted device identity does not match the upload URL' });
+    }
     const camera = safeCamera(url.searchParams.get('camera'));
     const frameKey = `${deviceId}:${camera}`;
     const capture = url.searchParams.get('capture') === 'photo' ? 'photo' : 'stream';
@@ -205,6 +285,115 @@ export function createSensorCloudServer(options = {}) {
     emitFrame(deviceId, camera, frame);
     emitSse('frame', deviceId, { deviceId, camera, receivedAt, bytes: frame.length, capture, photoFile });
     jsonResponse(response, 202, { accepted: true, receivedAt, camera, capture, photoFile });
+  }
+
+  async function handlePairingRequest(request, response) {
+    if (!serverCertificateDer?.length) {
+      return jsonResponse(response, 503, { error: 'Laptop pairing is not configured' });
+    }
+    const payload = await readJsonBody(request, PAIRING_LIMIT);
+    const deviceId = safeDeviceId(payload.deviceId);
+    const deviceName = String(payload.deviceName || deviceId).trim().slice(0, 160) || deviceId;
+    const clientNonce = Buffer.from(String(payload.clientNonce || ''), 'base64');
+    if (clientNonce.length !== 32) {
+      return jsonResponse(response, 400, { error: 'clientNonce must contain 32 random bytes' });
+    }
+
+    cleanPairingRequests();
+    for (const [requestId, value] of pairingRequests) {
+      if (value.deviceId === deviceId && value.status === 'pending') pairingRequests.delete(requestId);
+    }
+
+    const requestId = randomUUID();
+    const createdAt = new Date().toISOString();
+    const expiresAt = Date.now() + PAIRING_TTL_MS;
+    pairingRequests.set(requestId, {
+      clientNonce,
+      code: pairingCode(serverCertificateDer, clientNonce, requestId),
+      createdAt,
+      deviceId,
+      deviceName,
+      expiresAt,
+      remoteAddress: request.socket?.remoteAddress || '',
+      status: 'pending'
+    });
+    jsonResponse(response, 202, {
+      expiresAt: new Date(expiresAt).toISOString(),
+      requestId,
+      status: 'pending'
+    });
+  }
+
+  async function handlePairingStatus(response, url) {
+    cleanPairingRequests();
+    const requestId = String(url.searchParams.get('requestId') || '');
+    const deviceId = safeDeviceId(url.searchParams.get('deviceId'));
+    const clientNonce = Buffer.from(String(url.searchParams.get('clientNonce') || ''), 'base64');
+    const value = pairingRequests.get(requestId);
+    if (!value || value.deviceId !== deviceId || clientNonce.length !== 32 || !value.clientNonce.equals(clientNonce)) {
+      return jsonResponse(response, 404, { error: 'Pairing request was not found or has expired' });
+    }
+    if (value.status === 'denied') return jsonResponse(response, 200, { status: 'denied' });
+    if (value.status !== 'approved') return jsonResponse(response, 200, { status: 'pending' });
+    jsonResponse(response, 200, {
+      applicationKey: value.applicationKey.toString('base64'),
+      approvedAt: value.approvedAt,
+      status: 'approved'
+    });
+  }
+
+  async function listPairingRequests(request, response) {
+    if (!isLoopbackRequest(request)) {
+      return jsonResponse(response, 403, { error: 'Pairing decisions are available only on the laptop itself' });
+    }
+    cleanPairingRequests();
+    const requests = [...pairingRequests.entries()]
+      .filter(([, value]) => value.status === 'pending')
+      .map(([requestId, value]) => ({
+        code: value.code,
+        createdAt: value.createdAt,
+        deviceId: value.deviceId,
+        deviceName: value.deviceName,
+        remoteAddress: value.remoteAddress,
+        requestId
+      }));
+    jsonResponse(response, 200, { requests });
+  }
+
+  async function decidePairing(request, response, decision) {
+    if (!isLoopbackRequest(request) || request.headers['x-sensor-dashboard'] !== 'local-approval') {
+      return jsonResponse(response, 403, { error: 'Approve or deny pairing from the laptop dashboard' });
+    }
+    const payload = await readJsonBody(request, PAIRING_LIMIT);
+    cleanPairingRequests();
+    const value = pairingRequests.get(String(payload.requestId || ''));
+    if (!value || value.status !== 'pending') {
+      return jsonResponse(response, 404, { error: 'Pending pairing request was not found' });
+    }
+    if (decision === 'deny') {
+      value.status = 'denied';
+      value.decidedAt = new Date().toISOString();
+      return jsonResponse(response, 200, { accepted: false, status: 'denied' });
+    }
+
+    await pairingsReady;
+    const approvedAt = new Date().toISOString();
+    const applicationKey = randomBytes(32);
+    pairedDevices.set(value.deviceId, {
+      applicationKey,
+      approvedAt,
+      deviceId: value.deviceId,
+      deviceName: value.deviceName
+    });
+    await persistPairings();
+    value.applicationKey = applicationKey;
+    value.approvedAt = approvedAt;
+    value.status = 'approved';
+    jsonResponse(response, 200, {
+      accepted: true,
+      deviceId: value.deviceId,
+      status: 'approved'
+    });
   }
 
   async function serveStatic(response, pathname) {
@@ -247,19 +436,31 @@ export function createSensorCloudServer(options = {}) {
   }
 
   const requestListener = async (request, response) => {
-    response.setHeader('Access-Control-Allow-Origin', '*');
     if (options.tls) response.setHeader('Strict-Transport-Security', 'max-age=31536000');
     if (request.method === 'OPTIONS') {
       response.writeHead(204, {
-        'Access-Control-Allow-Headers': 'Content-Type, X-Sensor-Encryption, X-Sensor-Plaintext-Type',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Origin': '*'
+        Allow: 'GET, POST, OPTIONS'
       });
       return response.end();
     }
 
     const url = new URL(request.url || '/', 'http://localhost');
     try {
+      if (request.method === 'POST' && url.pathname === '/api/pair/request') {
+        return await handlePairingRequest(request, response);
+      }
+      if (request.method === 'GET' && url.pathname === '/api/pair/status') {
+        return await handlePairingStatus(response, url);
+      }
+      if (request.method === 'GET' && url.pathname === '/api/pair/requests') {
+        return await listPairingRequests(request, response);
+      }
+      if (request.method === 'POST' && url.pathname === '/api/pair/approve') {
+        return await decidePairing(request, response, 'approve');
+      }
+      if (request.method === 'POST' && url.pathname === '/api/pair/deny') {
+        return await decidePairing(request, response, 'deny');
+      }
       if (request.method === 'POST' && url.pathname === '/api/telemetry') {
         return await handleTelemetry(request, response);
       }
@@ -275,12 +476,16 @@ export function createSensorCloudServer(options = {}) {
         return jsonResponse(response, 200, { devices });
       }
       if (request.method === 'GET' && url.pathname === '/api/status') {
+        await pairingsReady;
+        cleanPairingRequests();
         return jsonResponse(response, 200, {
           ok: true,
           devices: latest.size,
+          pairedDevices: pairedDevices.size,
+          pendingPairingRequests: [...pairingRequests.values()].filter(value => value.status === 'pending').length,
           receivedTelemetry,
           receivedFrames,
-          applicationEncryption: applicationEncryptionKey ? 'AES-256-GCM required' : 'disabled',
+          applicationEncryption: 'Per-phone AES-256-GCM required',
           startedAt: server.startedAt
         });
       }
@@ -328,7 +533,6 @@ export function createSensorCloudServer(options = {}) {
       if (request.method === 'GET' && url.pathname === '/events') {
         const deviceId = url.searchParams.get('deviceId') ? safeDeviceId(url.searchParams.get('deviceId')) : '';
         response.writeHead(200, {
-          'Access-Control-Allow-Origin': '*',
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
           'Content-Type': 'text/event-stream; charset=utf-8'

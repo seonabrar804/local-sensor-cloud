@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createCipheriv } from 'node:crypto';
+import { createCipheriv, createHash } from 'node:crypto';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
@@ -9,21 +9,27 @@ import { createSensorCloudServer } from '../sensor-cloud.js';
 
 const TINY_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 const FRONT_JPEG = Buffer.from([0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9]);
+const TEST_CERTIFICATE = Buffer.from('test-laptop-certificate-der');
 
 async function startCloud(options = {}) {
   const dataDirectory = await mkdtemp(path.join(tmpdir(), 'sensor-cloud-test-'));
-  const cloud = createSensorCloudServer({ dataDirectory, ...options });
+  const cloud = createSensorCloudServer({
+    dataDirectory,
+    pairingFile: path.join(dataDirectory, 'keys', 'paired-devices.json'),
+    serverCertificateDer: TEST_CERTIFICATE,
+    ...options
+  });
   await new Promise(resolve => cloud.server.listen(0, '127.0.0.1', resolve));
   const { port } = cloud.server.address();
   return { cloud, dataDirectory, origin: `http://127.0.0.1:${port}` };
 }
 
-function encryptPayload(key, route, plaintext) {
+function encryptPayload(key, deviceId, route, plaintext) {
   const iv = Buffer.alloc(12, 0x31);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
-  cipher.setAAD(Buffer.from(`LocalSensorCloud AES-GCM v1\n${route}`, 'utf8'));
+  cipher.setAAD(Buffer.from(`LocalSensorCloud AES-GCM v2\n${deviceId}\n${route}`, 'utf8'));
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  return Buffer.concat([Buffer.from('LSC1'), iv, ciphertext, cipher.getAuthTag()]);
+  return Buffer.concat([Buffer.from('LSC2'), iv, ciphertext, cipher.getAuthTag()]);
 }
 
 function request(origin, route, options = {}) {
@@ -51,67 +57,130 @@ function request(origin, route, options = {}) {
   });
 }
 
-test('health endpoint starts empty', async t => {
+async function pairPhone(origin, deviceId = 'test-phone', decision = 'approve') {
+  const clientNonce = Buffer.alloc(32, 0x5a);
+  const requested = await request(origin, '/api/pair/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: Buffer.from(JSON.stringify({
+      clientNonce: clientNonce.toString('base64'),
+      deviceId,
+      deviceName: 'Lab phone'
+    }))
+  });
+  assert.equal(requested.status, 202);
+  const { requestId } = JSON.parse(requested.body);
+
+  const pending = await request(origin, '/api/pair/requests');
+  assert.equal(pending.status, 200);
+  const pendingRequest = JSON.parse(pending.body).requests.find(value => value.requestId === requestId);
+  assert.ok(pendingRequest);
+  const digest = createHash('sha256').update(TEST_CERTIFICATE).update(clientNonce).update(requestId).digest();
+  assert.equal(pendingRequest.code, String(digest.readUInt32BE(0) % 1_000_000).padStart(6, '0'));
+
+  const decided = await request(origin, `/api/pair/${decision}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Sensor-Dashboard': 'local-approval'
+    },
+    body: Buffer.from(JSON.stringify({ requestId }))
+  });
+  assert.equal(decided.status, 200);
+
+  const statusRoute = `/api/pair/status?requestId=${encodeURIComponent(requestId)}`
+    + `&deviceId=${encodeURIComponent(deviceId)}`
+    + `&clientNonce=${encodeURIComponent(clientNonce.toString('base64'))}`;
+  const status = await request(origin, statusRoute);
+  assert.equal(status.status, 200);
+  const payload = JSON.parse(status.body);
+  if (decision === 'deny') return payload;
+  assert.equal(payload.status, 'approved');
+  const key = Buffer.from(payload.applicationKey, 'base64');
+  assert.equal(key.length, 32);
+  return { key, requestId };
+}
+
+function encryptedHeaders(deviceId) {
+  return {
+    'Content-Type': 'application/octet-stream',
+    'X-Sensor-Device-Id': deviceId,
+    'X-Sensor-Encryption': 'aes-256-gcm-v2'
+  };
+}
+
+test('health endpoint starts empty and ready for phone pairing', async t => {
   const { cloud, origin } = await startCloud();
   t.after(() => cloud.close());
   const response = await request(origin, '/api/status');
   assert.equal(response.status, 200);
-  assert.deepEqual(JSON.parse(response.body).devices, 0);
+  const status = JSON.parse(response.body);
+  assert.equal(status.devices, 0);
+  assert.equal(status.pairedDevices, 0);
+  assert.equal(status.applicationEncryption, 'Per-phone AES-256-GCM required');
 });
 
-test('telemetry is accepted by laptop address and becomes queryable', async t => {
+test('laptop approval pairs a phone and denial does not', async t => {
+  const { cloud, origin } = await startCloud();
+  t.after(() => cloud.close());
+  const denied = await pairPhone(origin, 'denied-phone', 'deny');
+  assert.equal(denied.status, 'denied');
+  await pairPhone(origin, 'approved-phone');
+  const status = JSON.parse((await request(origin, '/api/status')).body);
+  assert.equal(status.pairedDevices, 1);
+  assert.equal(status.pendingPairingRequests, 0);
+});
+
+test('paired telemetry is decrypted, stored, and queryable', async t => {
   const { cloud, origin, dataDirectory } = await startCloud();
   t.after(() => cloud.close());
-  const telemetry = { deviceId: 'test phone', deviceName: 'Lab phone', noise: { dbfs: -31.4 }, sensors: [] };
-
-  const telemetryBody = Buffer.from(JSON.stringify(telemetry));
-  const accepted = await request(origin, '/api/telemetry', {
+  const deviceId = 'test-phone';
+  const { key } = await pairPhone(origin, deviceId);
+  const telemetry = { deviceId, deviceName: 'Lab phone', noise: { dbfs: -31.4 }, sensors: [] };
+  const route = '/api/telemetry';
+  const accepted = await request(origin, route, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: telemetryBody
+    headers: encryptedHeaders(deviceId),
+    body: encryptPayload(key, deviceId, route, Buffer.from(JSON.stringify(telemetry)))
   });
   assert.equal(accepted.status, 202);
 
-  const latest = JSON.parse((await request(origin, '/api/latest?deviceId=test_phone')).body);
-  assert.equal(latest.deviceId, 'test_phone');
+  const latest = JSON.parse((await request(origin, '/api/latest?deviceId=test-phone')).body);
+  assert.equal(latest.deviceId, deviceId);
   assert.equal(latest.noise.dbfs, -31.4);
-
   const devices = JSON.parse((await request(origin, '/api/devices')).body);
   assert.equal(devices.devices[0].deviceName, 'Lab phone');
   const log = await readFile(path.join(dataDirectory, 'telemetry', `${new Date().toISOString().slice(0, 10)}.jsonl`), 'utf8');
   assert.match(log, /"deviceName":"Lab phone"/);
 });
 
-test('JPEG frames are stored and returned', async t => {
+test('paired front and back JPEG photos are stored and returned', async t => {
   const { cloud, origin, dataDirectory } = await startCloud();
   t.after(() => cloud.close());
+  const deviceId = 'camera-phone';
+  const { key } = await pairPhone(origin, deviceId);
 
-  const accepted = await request(origin, '/api/frame?deviceId=test-phone&capture=photo', {
+  const backRoute = `/api/frame?deviceId=${deviceId}&capture=photo`;
+  const accepted = await request(origin, backRoute, {
     method: 'POST',
-    headers: { 'Content-Type': 'image/jpeg' },
-    body: TINY_JPEG
+    headers: encryptedHeaders(deviceId),
+    body: encryptPayload(key, deviceId, backRoute, TINY_JPEG)
   });
   assert.equal(accepted.status, 202);
   const receipt = JSON.parse(accepted.body);
   assert.equal(receipt.camera, 'back');
-  assert.equal(receipt.capture, 'photo');
   assert.ok(receipt.photoFile.endsWith('.jpg'));
-
-  const frame = (await request(origin, '/api/frame/latest?deviceId=test-phone')).body;
-  assert.deepEqual(frame, TINY_JPEG);
   assert.deepEqual(await readFile(path.join(dataDirectory, 'photos', receipt.photoFile)), TINY_JPEG);
 
-  const frontAccepted = await request(origin, '/api/frame?deviceId=test-phone&camera=front', {
+  const frontRoute = `/api/frame?deviceId=${deviceId}&camera=front`;
+  const frontAccepted = await request(origin, frontRoute, {
     method: 'POST',
-    headers: { 'Content-Type': 'image/jpeg' },
-    body: FRONT_JPEG
+    headers: encryptedHeaders(deviceId),
+    body: encryptPayload(key, deviceId, frontRoute, FRONT_JPEG)
   });
   assert.equal(frontAccepted.status, 202);
-  assert.equal(JSON.parse(frontAccepted.body).camera, 'front');
-  const frontFrame = (await request(origin, '/api/frame/latest?deviceId=test-phone&camera=front')).body;
-  assert.deepEqual(frontFrame, FRONT_JPEG);
-  const backFrame = (await request(origin, '/api/frame/latest?deviceId=test-phone&camera=back')).body;
-  assert.deepEqual(backFrame, TINY_JPEG);
+  assert.deepEqual((await request(origin, `/api/frame/latest?deviceId=${deviceId}&camera=front`)).body, FRONT_JPEG);
+  assert.deepEqual((await request(origin, `/api/frame/latest?deviceId=${deviceId}&camera=back`)).body, TINY_JPEG);
 });
 
 test('built Android APK is available as a direct download', async t => {
@@ -129,60 +198,39 @@ test('built Android APK is available as a direct download', async t => {
   assert.deepEqual(response.body, apk);
 });
 
-test('AES-GCM uploads are decrypted and plaintext or tampering is rejected', async t => {
-  const applicationEncryptionKey = Buffer.alloc(32, 0x42);
-  const { cloud, origin } = await startCloud({ applicationEncryptionKey });
+test('unpaired, plaintext, wrong-identity, and tampered uploads are rejected', async t => {
+  const { cloud, origin } = await startCloud();
   t.after(() => cloud.close());
   const route = '/api/telemetry';
-  const plaintext = Buffer.from(JSON.stringify({
-    deviceId: 'encrypted-phone',
-    deviceName: 'Encrypted phone',
-    sensors: []
-  }));
+  const deviceId = 'encrypted-phone';
+  const plaintext = Buffer.from(JSON.stringify({ deviceId, deviceName: 'Encrypted phone', sensors: [] }));
 
+  const unpaired = await request(origin, route, {
+    method: 'POST', headers: encryptedHeaders(deviceId), body: Buffer.from('not encrypted')
+  });
+  assert.equal(unpaired.status, 401);
+
+  const { key } = await pairPhone(origin, deviceId);
   const plaintextResponse = await request(origin, route, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: plaintext
+    method: 'POST', headers: { 'X-Sensor-Device-Id': deviceId }, body: plaintext
   });
   assert.equal(plaintextResponse.status, 415);
 
-  const encrypted = encryptPayload(applicationEncryptionKey, route, plaintext);
+  const encrypted = encryptPayload(key, deviceId, route, plaintext);
   const accepted = await request(origin, route, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      'X-Sensor-Encryption': 'aes-256-gcm-v1'
-    },
-    body: encrypted
+    method: 'POST', headers: encryptedHeaders(deviceId), body: encrypted
   });
   assert.equal(accepted.status, 202);
-  const latest = JSON.parse((await request(origin, '/api/latest?deviceId=encrypted-phone')).body);
-  assert.equal(latest.deviceName, 'Encrypted phone');
 
-  const frameRoute = '/api/frame?deviceId=encrypted-phone&camera=front&capture=photo';
-  const encryptedFrame = encryptPayload(applicationEncryptionKey, frameRoute, FRONT_JPEG);
-  const frameAccepted = await request(origin, frameRoute, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      'X-Sensor-Encryption': 'aes-256-gcm-v1'
-    },
-    body: encryptedFrame
+  const wrongIdentity = await request(origin, route, {
+    method: 'POST', headers: encryptedHeaders('different-phone'), body: encrypted
   });
-  assert.equal(frameAccepted.status, 202);
-  const receivedFrame = (await request(origin, '/api/frame/latest?deviceId=encrypted-phone&camera=front')).body;
-  assert.deepEqual(receivedFrame, FRONT_JPEG);
+  assert.equal(wrongIdentity.status, 401);
 
   const tampered = Buffer.from(encrypted);
   tampered[tampered.length - 1] ^= 1;
   const rejected = await request(origin, route, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      'X-Sensor-Encryption': 'aes-256-gcm-v1'
-    },
-    body: tampered
+    method: 'POST', headers: encryptedHeaders(deviceId), body: tampered
   });
   assert.equal(rejected.status, 400);
 });

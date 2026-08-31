@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { X509Certificate } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,24 +11,20 @@ const port = Number(process.env.SENSOR_CLOUD_PORT || 8787);
 const dataDirectory = process.env.SENSOR_CLOUD_DATA || path.join(serverDirectory, 'data');
 const certificatePath = process.env.SENSOR_CLOUD_CERT || path.join(serverDirectory, 'tls', 'server-cert.pem');
 const privateKeyPath = process.env.SENSOR_CLOUD_KEY || path.join(serverDirectory, 'tls', 'server-key.pem');
-const applicationKeyPath = process.env.SENSOR_CLOUD_APP_KEY || path.join(serverDirectory, 'keys', 'application-aes.key');
+const pairingFile = process.env.SENSOR_CLOUD_PAIRINGS || path.join(serverDirectory, 'keys', 'paired-devices.json');
 const apkPath = process.env.SENSOR_CLOUD_APK
   || path.join(serverDirectory, '..', 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
-const [cert, key, applicationEncryptionKey] = await Promise.all([
+const [cert, key] = await Promise.all([
   readFile(certificatePath),
-  readFile(privateKeyPath),
-  readFile(applicationKeyPath)
+  readFile(privateKeyPath)
 ]);
-
-if (applicationEncryptionKey.length !== 32) {
-  throw new Error(`Application AES key must contain exactly 32 bytes: ${applicationKeyPath}`);
-}
 
 const cloud = createSensorCloudServer({
   apkPath,
   dataDirectory,
+  pairingFile,
+  serverCertificateDer: new X509Certificate(cert).raw,
   tls: { cert, key },
-  applicationEncryptionKey
 });
 
 cloud.server.listen(port, host, () => {
@@ -35,7 +32,9 @@ cloud.server.listen(port, host, () => {
   const actualPort = typeof address === 'object' && address ? address.port : port;
   const browserHost = host === '0.0.0.0' || host === '::' ? 'localhost' : host;
   console.log(`Encrypted Local Sensor Cloud listening on https://${host}:${actualPort}`);
-  console.log('Application payload encryption: AES-256-GCM required');
+  console.log('Phone pairing: approve each phone from the dashboard on this laptop');
+  console.log('Application payload encryption: unique AES-256-GCM key for every approved phone');
+  console.log(`Laptop approval dashboard: https://${browserHost}:${actualPort}`);
   console.log(`Android APK download: https://${browserHost}:${actualPort}/app-debug.apk`);
   console.log(`Data directory: ${dataDirectory}`);
 });

@@ -46,6 +46,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -111,9 +112,9 @@ public class StreamService extends Service implements SensorEventListener {
     private static final long DEFAULT_TELEMETRY_INTERVAL_MS = 1000;
     private static final long DEFAULT_PHOTO_INTERVAL_MS = 5000;
     private static final long MAX_INTERVAL_MS = TimeUnit.DAYS.toMillis(1);
-    private static final byte[] APPLICATION_ENCRYPTION_MAGIC = new byte[] { 'L', 'S', 'C', '1' };
-    private static final String APPLICATION_ENCRYPTION_HEADER = "aes-256-gcm-v1";
-    private static final String APPLICATION_AAD_PREFIX = "LocalSensorCloud AES-GCM v1\n";
+    private static final byte[] APPLICATION_ENCRYPTION_MAGIC = new byte[] { 'L', 'S', 'C', '2' };
+    private static final String APPLICATION_ENCRYPTION_HEADER = "aes-256-gcm-v2";
+    private static final String APPLICATION_AAD_PREFIX = "LocalSensorCloud AES-GCM v2\n";
     private static final int APPLICATION_IV_LENGTH = 12;
     private static volatile boolean running;
 
@@ -172,8 +173,6 @@ public class StreamService extends Service implements SensorEventListener {
         networkExecutor = Executors.newScheduledThreadPool(3);
         sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
         createNotificationChannel();
-        initializePinnedTls();
-        initializeApplicationEncryption();
     }
 
     @Override
@@ -209,6 +208,11 @@ public class StreamService extends Service implements SensorEventListener {
                     DEFAULT_PHOTO_INTERVAL_MS);
             previewBroadcastEnabled = true;
             startForegroundCompat();
+            if (!initializePairedSecurity()) {
+                sendStatus(false, "Laptop is not paired", "Return to the app and ask the laptop to approve this phone");
+                stopSelf();
+                return START_NOT_STICKY;
+            }
             startStreaming();
             return START_NOT_STICKY;
         }
@@ -848,8 +852,19 @@ public class StreamService extends Service implements SensorEventListener {
         return level >= 0 && scale > 0 ? Math.round(level * 100f / scale) : -1;
     }
 
-    private void initializePinnedTls() {
-        try (InputStream certificateInput = getResources().openRawResource(R.raw.server_certificate)) {
+    private boolean initializePairedSecurity() {
+        pinnedSslSocketFactory = null;
+        pinnedCertificateBytes = null;
+        applicationEncryptionKey = null;
+        tlsInitializationError = null;
+        applicationEncryptionError = null;
+        PairingStore.PairingMaterial pairing = PairingStore.load(this, endpoint, deviceId);
+        if (pairing == null) {
+            tlsInitializationError = "No approved pairing exists for this laptop and phone ID";
+            applicationEncryptionError = tlsInitializationError;
+            return false;
+        }
+        try (InputStream certificateInput = new ByteArrayInputStream(pairing.certificateDer)) {
             CertificateFactory certificateFactory = CertificateFactory.getInstance("X.509");
             Certificate pinnedCertificate = certificateFactory.generateCertificate(certificateInput);
             pinnedCertificateBytes = pinnedCertificate.getEncoded();
@@ -861,24 +876,14 @@ public class StreamService extends Service implements SensorEventListener {
             SSLContext sslContext = SSLContext.getInstance("TLS");
             sslContext.init(null, trustManagerFactory.getTrustManagers(), null);
             pinnedSslSocketFactory = sslContext.getSocketFactory();
+            if (pairing.applicationKey.length != 32) throw new GeneralSecurityException("Invalid paired encryption key");
+            applicationEncryptionKey = new SecretKeySpec(pairing.applicationKey, "AES");
+            return true;
         } catch (GeneralSecurityException | IOException error) {
             tlsInitializationError = error.getMessage();
-            Log.e(TAG, "Could not initialize pinned TLS", error);
-        }
-    }
-
-    private void initializeApplicationEncryption() {
-        try (InputStream keyInput = getResources().openRawResource(R.raw.application_aes_key);
-             ByteArrayOutputStream keyOutput = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[64];
-            int read;
-            while ((read = keyInput.read(buffer)) >= 0) keyOutput.write(buffer, 0, read);
-            byte[] keyBytes = keyOutput.toByteArray();
-            if (keyBytes.length != 32) throw new GeneralSecurityException("AES key must contain exactly 32 bytes");
-            applicationEncryptionKey = new SecretKeySpec(keyBytes, "AES");
-        } catch (GeneralSecurityException | IOException error) {
             applicationEncryptionError = error.getMessage();
-            Log.e(TAG, "Could not initialize application encryption", error);
+            Log.e(TAG, "Could not initialize pinned TLS", error);
+            return false;
         }
     }
 
@@ -891,7 +896,8 @@ public class StreamService extends Service implements SensorEventListener {
             secureRandom.nextBytes(iv);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, applicationEncryptionKey, new GCMParameterSpec(128, iv));
-            cipher.updateAAD((APPLICATION_AAD_PREFIX + route).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            cipher.updateAAD((APPLICATION_AAD_PREFIX + deviceId + "\n" + route)
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
             byte[] ciphertextAndTag = cipher.doFinal(plaintext);
             byte[] envelope = new byte[APPLICATION_ENCRYPTION_MAGIC.length + iv.length + ciphertextAndTag.length];
             System.arraycopy(APPLICATION_ENCRYPTION_MAGIC, 0, envelope, 0, APPLICATION_ENCRYPTION_MAGIC.length);
@@ -928,8 +934,9 @@ public class StreamService extends Service implements SensorEventListener {
             connection.setFixedLengthStreamingMode(encryptedBody.length);
             connection.setRequestProperty("Content-Type", "application/octet-stream");
             connection.setRequestProperty("X-Sensor-Encryption", APPLICATION_ENCRYPTION_HEADER);
+            connection.setRequestProperty("X-Sensor-Device-Id", deviceId);
             connection.setRequestProperty("X-Sensor-Plaintext-Type", contentType);
-            connection.setRequestProperty("User-Agent", "LocalSensorCloud-Android/1.7");
+            connection.setRequestProperty("User-Agent", "LocalSensorCloud-Android");
             try (OutputStream output = connection.getOutputStream()) {
                 output.write(encryptedBody);
             }

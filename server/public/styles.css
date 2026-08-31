@@ -24,6 +24,23 @@ select { appearance: none; min-width: min(300px, 40vw); padding: 10px 38px 10px 
 .download-apk:hover { background: #95efb4; }
 .last-seen { margin-left: auto; color: #7e8d83; font-size: 12px; }
 .last-seen strong { color: #bdc9c0; font-weight: 600; }
+.pairing { margin-top: 18px; padding: 20px; }
+.pairing-help { max-width: 820px; color: #8f9e94; font-size: 13px; line-height: 1.6; }
+.pairing-requests { display: grid; gap: 10px; margin-top: 16px; }
+.pairing-request { display: grid; grid-template-columns: minmax(190px, 1fr) auto auto; align-items: center; gap: 22px; padding: 14px 15px; border: 1px solid #33463a; border-radius: 13px; background: #17231c; }
+.pairing-device strong { display: block; color: #f1f7f3; font-size: 14px; }
+.pairing-device small { display: block; margin-top: 4px; color: #74837a; font-size: 11px; }
+.pairing-code { text-align: center; }
+.pairing-code span { display: block; color: #839187; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+.pairing-code strong { display: block; margin-top: 3px; color: #8cf2ae; font: 700 26px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; }
+.pairing-actions { display: flex; gap: 8px; }
+.pairing-actions button { padding: 9px 13px; border: 1px solid #405246; border-radius: 9px; color: #d8e2db; background: #202e25; font-family: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+.pairing-actions button:disabled { opacity: .45; cursor: wait; }
+.pairing-actions .approve { border-color: #67c889; color: #07140c; background: #79e29f; }
+.pairing-actions .deny:hover { border-color: #bd6b6b; color: #ffc1c1; }
+.pairing-actions .approve:hover { background: #95efb4; }
+.pairing-empty { padding: 18px; border: 1px dashed #2c3b32; border-radius: 12px; color: #68776e; text-align: center; font-size: 12px; }
+.pairing-empty.error { color: #e8a9a9; }
 .overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(270px, .72fr); gap: 18px; margin-top: 18px; }
 .camera, .sound, .sensor-panel { padding: 20px; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
@@ -65,6 +82,8 @@ footer code { color: #8aa092; }
   .sound { grid-column: auto; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .topbar { min-height: 92px; }
+  .pairing-request { grid-template-columns: 1fr auto; }
+  .pairing-actions { grid-column: 1 / -1; }
 }
 
 @media (max-width: 540px) {
@@ -75,6 +94,10 @@ footer code { color: #8aa092; }
   .toolbar select { width: 100%; min-width: 0; }
   .last-seen { margin-left: 0; }
   .camera, .sound, .sensor-panel { padding: 14px; }
+  .pairing { padding: 14px; }
+  .pairing-request { grid-template-columns: 1fr; gap: 12px; }
+  .pairing-code { text-align: left; }
+  .pairing-actions { grid-column: auto; }
   .camera-stage { min-height: 190px; }
   .metrics { gap: 10px; }
   .metric { padding: 14px; }

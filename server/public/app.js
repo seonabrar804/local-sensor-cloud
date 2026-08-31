@@ -15,6 +15,8 @@ const elements = {
   light: document.querySelector('#lightValue'),
   noise: document.querySelector('#noiseValue'),
   noiseChart: document.querySelector('#noiseChart'),
+  pairingCount: document.querySelector('#pairingCount'),
+  pairingRequests: document.querySelector('#pairingRequests'),
   pressure: document.querySelector('#pressureValue'),
   sensorCount: document.querySelector('#sensorCount'),
   sensorRows: document.querySelector('#sensorRows'),
@@ -134,7 +136,59 @@ async function refreshDevices() {
   }
 }
 
+async function refreshPairingRequests() {
+  try {
+    const response = await fetch('/api/pair/requests', { cache: 'no-store' });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Unable to read pairing requests');
+    const requests = Array.isArray(payload.requests) ? payload.requests : [];
+    elements.pairingCount.textContent = `${requests.length} waiting`;
+    elements.pairingRequests.innerHTML = requests.length ? requests.map(request => `
+      <article class="pairing-request">
+        <div class="pairing-device">
+          <strong>${escapeHtml(request.deviceName)}</strong>
+          <small>${escapeHtml(request.deviceId)} · ${escapeHtml(request.remoteAddress)}</small>
+        </div>
+        <div class="pairing-code"><span>Compare code</span><strong>${escapeHtml(request.code)}</strong></div>
+        <div class="pairing-actions">
+          <button type="button" class="deny" data-pairing-action="deny" data-request-id="${escapeHtml(request.requestId)}">Deny</button>
+          <button type="button" class="approve" data-pairing-action="approve" data-request-id="${escapeHtml(request.requestId)}">Approve</button>
+        </div>
+      </article>`).join('') : '<div class="pairing-empty">No phone is waiting for approval.</div>';
+  } catch (error) {
+    elements.pairingCount.textContent = 'Laptop only';
+    elements.pairingRequests.innerHTML = `<div class="pairing-empty error">${escapeHtml(error.message)} Open this dashboard at <strong>https://localhost:8787</strong> on the laptop to approve phones.</div>`;
+  }
+}
+
+async function decidePairing(action, requestId, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/pair/${action}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Sensor-Dashboard': 'local-approval'
+      },
+      body: JSON.stringify({ requestId })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `Could not ${action} this phone`);
+    await refreshPairingRequests();
+  } catch (error) {
+    window.alert(error.message);
+    button.disabled = false;
+  }
+}
+
 elements.device.addEventListener('change', () => connect(elements.device.value));
+elements.pairingRequests.addEventListener('click', event => {
+  const button = event.target.closest('[data-pairing-action]');
+  if (!button) return;
+  decidePairing(button.dataset.pairingAction, button.dataset.requestId, button);
+});
 window.addEventListener('resize', drawNoiseChart);
 refreshDevices();
+refreshPairingRequests();
 setInterval(refreshDevices, 4000);
+setInterval(refreshPairingRequests, 2000);

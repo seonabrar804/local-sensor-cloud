@@ -80,9 +80,12 @@ public class MainActivity extends Activity {
     private Bitmap displayedBackPreviewBitmap;
     private Bitmap displayedFrontPreviewBitmap;
     private Button startButton;
+    private Button pairButton;
     private Button stopButton;
     private Button snapshotButton;
     private boolean pendingStart;
+    private boolean pairingInProgress;
+    private Thread pairingThread;
 
     private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
         @Override
@@ -109,7 +112,9 @@ public class MainActivity extends Activity {
         window.setNavigationBarColor(background);
         setContentView(buildContent());
         loadPreferences();
-        updateState(StreamService.isRunning(), StreamService.isRunning() ? "Streaming in background" : "Ready to connect", "");
+        boolean paired = PairingStore.has(this, endpointInput.getText().toString(), deviceIdInput.getText().toString());
+        updateState(StreamService.isRunning(), StreamService.isRunning() ? "Streaming in background"
+                : paired ? "Laptop paired" : "Enter a laptop address", paired ? "Ready to stream securely" : "The laptop must approve this phone first");
     }
 
     @Override
@@ -134,6 +139,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (pairingThread != null) pairingThread.interrupt();
         if (backCameraPreview != null) backCameraPreview.setImageDrawable(null);
         if (frontCameraPreview != null) frontCameraPreview.setImageDrawable(null);
         if (displayedBackPreviewBitmap != null && !displayedBackPreviewBitmap.isRecycled()) displayedBackPreviewBitmap.recycle();
@@ -191,7 +197,15 @@ public class MainActivity extends Activity {
         deviceIdInput = field("Device ID", InputType.TYPE_CLASS_TEXT);
         content.addView(endpointInput, margins(-1, 0, -1, 10));
         content.addView(deviceNameInput, margins(-1, 0, -1, 10));
-        content.addView(deviceIdInput, margins(-1, 0, -1, 16));
+        content.addView(deviceIdInput, margins(-1, 0, -1, 10));
+
+        pairButton = button("PAIR / RE-PAIR LAPTOP", false);
+        pairButton.setTextColor(primary);
+        pairButton.setOnClickListener(view -> beginPairing(false));
+        content.addView(pairButton, margins(-1, 0, -1, 7));
+        TextView pairingHelp = text("The phone sends a connection request. Compare the six-digit code, then choose Approve on the laptop dashboard.", 11, textSecondary);
+        pairingHelp.setLineSpacing(dp(2), 1f);
+        content.addView(pairingHelp, margins(-1, 0, -1, 16));
 
         content.addView(buildSchedulePanel(), margins(-1, 0, -1, 18));
 
@@ -214,7 +228,7 @@ public class MainActivity extends Activity {
         content.addView(buildCameraPanel(), margins(-1, 22, -1, 0));
         content.addView(buildSensorPanel(), margins(-1, 22, -1, 0));
 
-        TextView privacy = text("Telemetry and photos are encrypted with AES-256-GCM, then sent through certificate-pinned TLS. Microphone audio is never uploaded — only its calculated dBFS level.", 11, textSecondary);
+        TextView privacy = text("After laptop approval, telemetry and photos use a unique AES-256-GCM key and certificate-pinned TLS. Microphone audio is never uploaded — only its calculated dBFS level.", 11, textSecondary);
         privacy.setGravity(Gravity.CENTER);
         privacy.setLineSpacing(dp(2), 1f);
         content.addView(privacy, margins(-1, 20, -1, 0));
@@ -412,18 +426,67 @@ public class MainActivity extends Activity {
     }
 
     private void requestStart() {
-        String endpoint = endpointInput.getText().toString().trim();
-        if (!endpoint.startsWith("https://")) {
-            endpointInput.setError("Secure connections must begin with https://");
-            return;
-        }
-        if (deviceIdInput.getText().toString().trim().isEmpty()) {
-            deviceIdInput.setError("Device ID is required");
-            return;
-        }
+        if (!validateConnectionInputs()) return;
         if (intervalMillis(telemetryIntervalInput, telemetryUnitButton) < 0
                 || intervalMillis(photoIntervalInput, photoUnitButton) < 0) return;
         savePreferences();
+        if (!PairingStore.has(this, endpointInput.getText().toString(), deviceIdInput.getText().toString())) {
+            beginPairing(true);
+            return;
+        }
+        requestPermissionsOrStart();
+    }
+
+    private boolean validateConnectionInputs() {
+        String endpoint = endpointInput.getText().toString().trim();
+        if (!endpoint.startsWith("https://")) {
+            endpointInput.setError("Secure connections must begin with https://");
+            return false;
+        }
+        String deviceId = deviceIdInput.getText().toString().trim();
+        if (!deviceId.matches("[A-Za-z0-9_.-]{1,96}")) {
+            deviceIdInput.setError("Use 1–96 letters, numbers, dots, dashes, or underscores");
+            return false;
+        }
+        return true;
+    }
+
+    private void beginPairing(boolean startWhenApproved) {
+        if (pairingInProgress || StreamService.isRunning() || !validateConnectionInputs()) return;
+        savePreferences();
+        pairingInProgress = true;
+        updateState(false, "Sending connection request…", "Keep this screen open");
+        String endpoint = endpointInput.getText().toString().trim();
+        String deviceId = deviceIdInput.getText().toString().trim();
+        String deviceName = deviceNameInput.getText().toString().trim();
+        pairingThread = new Thread(() -> PairingClient.pair(getApplicationContext(), endpoint, deviceId, deviceName,
+                new PairingClient.Listener() {
+                    @Override public void onVerificationCode(String code) {
+                        runOnUiThread(() -> updateState(false, "Compare code " + code,
+                                "Open https://localhost:8787 on the laptop and approve only if its code is also " + code));
+                    }
+
+                    @Override public void onApproved() {
+                        runOnUiThread(() -> {
+                            pairingInProgress = false;
+                            pairingThread = null;
+                            updateState(false, "Laptop approved", "Certificate pinned · unique phone encryption key saved securely");
+                            if (startWhenApproved) requestPermissionsOrStart();
+                        });
+                    }
+
+                    @Override public void onFailure(String message) {
+                        runOnUiThread(() -> {
+                            pairingInProgress = false;
+                            pairingThread = null;
+                            updateState(false, "Connection not approved", message);
+                        });
+                    }
+                }), "laptop-pairing");
+        pairingThread.start();
+    }
+
+    private void requestPermissionsOrStart() {
         if (!hasCorePermissions()) {
             pendingStart = true;
             requestPermissions(missingPermissions(), PERMISSION_REQUEST);
@@ -515,7 +578,7 @@ public class MainActivity extends Activity {
             defaultId = "android-" + UUID.randomUUID().toString().substring(0, 12);
             preferences.edit().putString("generatedDeviceId", defaultId).apply();
         }
-        String savedEndpoint = preferences.getString("endpoint", "https://192.168.10.104:8787");
+        String savedEndpoint = preferences.getString("endpoint", "");
         if (savedEndpoint.startsWith("http://")) savedEndpoint = "https://" + savedEndpoint.substring("http://".length());
         endpointInput.setText(savedEndpoint);
         deviceNameInput.setText(preferences.getString("deviceName", Build.MANUFACTURER + " " + Build.MODEL));
@@ -548,20 +611,27 @@ public class MainActivity extends Activity {
         if (statusLabel == null) return;
         statusLabel.setText(message == null || message.trim().isEmpty() ? (running ? "Streaming" : "Stopped") : message);
         packetLabel.setText(detail == null ? "" : detail);
-        startButton.setEnabled(!running);
-        startButton.setAlpha(running ? .45f : 1f);
+        boolean configurationEnabled = !running && !pairingInProgress;
+        startButton.setEnabled(configurationEnabled);
+        startButton.setAlpha(configurationEnabled ? 1f : .45f);
+        pairButton.setEnabled(configurationEnabled);
+        pairButton.setText(pairingInProgress ? "WAITING FOR LAPTOP…" : "PAIR / RE-PAIR LAPTOP");
+        pairButton.setAlpha(configurationEnabled ? 1f : .45f);
         stopButton.setEnabled(running);
         snapshotButton.setEnabled(running);
         stopButton.setAlpha(running ? 1f : .4f);
         snapshotButton.setAlpha(running ? 1f : .4f);
-        telemetryIntervalInput.setEnabled(!running);
-        photoIntervalInput.setEnabled(!running);
-        telemetryUnitButton.setEnabled(!running);
-        photoUnitButton.setEnabled(!running);
-        telemetryIntervalInput.setAlpha(running ? .55f : 1f);
-        photoIntervalInput.setAlpha(running ? .55f : 1f);
-        telemetryUnitButton.setAlpha(running ? .55f : 1f);
-        photoUnitButton.setAlpha(running ? .55f : 1f);
+        endpointInput.setEnabled(configurationEnabled);
+        deviceNameInput.setEnabled(configurationEnabled);
+        deviceIdInput.setEnabled(configurationEnabled);
+        telemetryIntervalInput.setEnabled(configurationEnabled);
+        photoIntervalInput.setEnabled(configurationEnabled);
+        telemetryUnitButton.setEnabled(configurationEnabled);
+        photoUnitButton.setEnabled(configurationEnabled);
+        telemetryIntervalInput.setAlpha(configurationEnabled ? 1f : .55f);
+        photoIntervalInput.setAlpha(configurationEnabled ? 1f : .55f);
+        telemetryUnitButton.setAlpha(configurationEnabled ? 1f : .55f);
+        photoUnitButton.setAlpha(configurationEnabled ? 1f : .55f);
         if (!running) {
             if (backCameraPreviewState != null) {
                 backCameraPreviewState.setText("STOPPED");

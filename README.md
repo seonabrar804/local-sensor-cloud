@@ -21,7 +21,7 @@ The laptop acts as the cloud server. It decrypts and stores the uploads, then pr
 
 - **Encryption** changes readable data into unreadable data. **Decryption** changes it back. A **key** is a secret value used to perform these operations.
 - **TLS (Transport Layer Security)** is the security system used by HTTPS. It creates an encrypted connection between two devices, so someone observing the network cannot read the exchanged data. It also uses a certificate to identify the server.
-- **Certificate pinning** means the Android app contains the expected laptop certificate. The app refuses the connection if another server presents a different certificate.
+- **Certificate pinning** means the Android app remembers the exact laptop certificate it saw during approved pairing. After that, the app refuses a connection if another server presents a different certificate.
 - **AES-GCM (Advanced Encryption Standard in Galois/Counter Mode)** is a method for encrypting a message with a shared secret key. AES hides the message, while GCM adds a check that detects whether anyone changed it. The app uses a new random value for every upload so identical data does not produce identical encrypted output.
 
 TLS and AES-GCM both use encryption, but at different places. TLS creates a protected connection, while application-level AES-GCM protects the sensor data and images themselves before they enter that connection.
@@ -36,7 +36,7 @@ The app uses three security layers, and each one protects a different part of th
 
 In simple terms, AES-GCM protects the actual sensor data and images, TLS protects their complete phone-to-laptop journey, and WPA protects the wireless part of that journey.
 
-The generated TLS private key and AES key stay outside Git. The matching public certificate and AES key are copied into the Android app during local setup, so the APK must be rebuilt whenever the keys or laptop certificate change.
+The APK is general: the same app can connect to different laptops. It contains no laptop certificate and no shared upload key. During first-time pairing, the laptop displays a connection request and both screens display a six-digit code. When the user verifies that the codes match and chooses **Approve**, the app pins that laptop's certificate and receives a new AES key created only for that phone. Android protects the saved key with its system keystore, and the laptop keeps its paired-phone keys outside Git.
 
 ## Start from scratch
 
@@ -213,7 +213,7 @@ Use the first local address printed for the active network connection.
 
 The address normally looks similar to `192.168.1.20`. It can change when the laptop joins another network.
 
-### 4. Generate security keys for this laptop
+### 4. Generate the laptop TLS certificate
 
 On Windows, use Git Bash and supply the laptop address found in the previous step:
 
@@ -227,9 +227,9 @@ On macOS or Linux, run:
 SENSOR_CLOUD_IP=192.168.1.20 ./setup-security.command
 ```
 
-Replace `192.168.1.20` with the laptop's actual address. The script creates the TLS certificate and private key, creates the AES key, and copies the required certificate and key material into the Android project.
+Replace `192.168.1.20` with the laptop's actual address. The script creates this laptop's TLS certificate and private key. It does not place either one in the Android app.
 
-Do not share or commit files from `server/keys/`, the TLS private key, or the generated Android AES-key resource.
+Do not share or commit the TLS private key or files from `server/keys/`. The server creates a separate AES key in that directory for each phone you approve.
 
 ### 5. Build the Android app
 
@@ -268,9 +268,19 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 If Android Studio was installed in another directory, change `JAVA_HOME` to its `jbr` directory. If Java is already configured, setting `JAVA_HOME` is unnecessary. You can also open the `android` directory in Android Studio and build the app there.
 
+This APK is reusable. It is not tied to the certificate, address, or AES key of the laptop that built it.
+
 ### 6. Install the app on the phone
 
-Choose either direct download or USB installation.
+Choose a GitHub download, a download from your laptop, or USB installation.
+
+#### Download the reusable APK from GitHub
+
+On the Android phone, open this link and install the downloaded file:
+
+[Download Local Sensor Cloud for Android](https://github.com/seonabrar804/local-sensor-cloud/releases/latest/download/LocalSensorCloud.apk)
+
+Android may ask you to allow installation from the browser or file manager. This is the same reusable APK for every laptop; the app learns the correct laptop certificate and phone-specific encryption key only after pairing is approved.
 
 #### Direct download from the laptop
 
@@ -281,7 +291,7 @@ This is the easiest method when the phone and laptop are on the same Wi-Fi netwo
 3. Tap **Download Android APK** on the dashboard. The direct download address is `https://LAPTOP_IP:8787/app-debug.apk`.
 4. Open the downloaded `LocalSensorCloud-debug.apk` and allow installation from the browser when Android asks.
 
-The APK is generated specifically for the laptop's pinned certificate and AES key, so it is intentionally not published as a reusable GitHub download. The laptop serves it over the encrypted local connection instead. Only download it while connected to your own trusted laptop and network.
+The laptop download and GitHub download contain the same general app. Neither contains the laptop's private key or any phone's AES key.
 
 #### Install with USB and ADB
 
@@ -321,13 +331,17 @@ If the firewall asks whether Node.js may accept incoming connections, allow it o
 ### 8. Connect the Android app
 
 1. Confirm that the phone and laptop are connected to the same Wi-Fi network.
-2. Open **Local Sensor Cloud** on the phone and grant the requested camera, microphone, and notification permissions.
-3. Enter the laptop URL using the address from step 3, for example `https://192.168.1.20:8787`.
-4. Select sensor-data and automatic-photo intervals. Each interval can use seconds or minutes.
-5. Tap **Start streaming**.
-6. Open the laptop dashboard and wait for the first scheduled upload.
+2. On the laptop, keep `https://localhost:8787` open. Approval is allowed only from this local dashboard, not from another phone or computer.
+3. Open **Local Sensor Cloud** on the phone and enter the laptop URL using the address from step 3, for example `https://192.168.1.20:8787`.
+4. Tap **Pair / re-pair laptop**, or tap **Start streaming** to send a pairing request automatically.
+5. A six-digit verification code appears on the phone. Find the pending phone request on the laptop dashboard and confirm that its code is exactly the same.
+6. If the codes match, choose **Approve** on the laptop. Choose **Deny** if the phone is unfamiliar or the codes differ.
+7. After approval, grant the camera, microphone, and notification permissions requested by Android.
+8. Select the sensor-data and automatic-photo intervals, then tap **Start streaming**. Each interval can use seconds or minutes.
 
-The app obtains the phone model, Android information, battery status, sensors, and camera capabilities directly from the phone. Nothing needs to be entered manually except the laptop address and upload intervals.
+No sensor, microphone, or camera capture starts before the laptop approves the phone. The app obtains the phone model, Android information, battery status, sensors, and camera capabilities directly from the phone. Nothing needs to be entered manually except the laptop address and upload intervals.
+
+The same APK can pair with another laptop later. Run that laptop's server, enter its HTTPS address, and repeat the code comparison and approval. Pairings are saved separately for each laptop address and phone ID.
 
 ## Using the app
 
@@ -374,13 +388,9 @@ Wireshark should identify the connection as TLS and show the uploads as encrypte
 
 ### Uploads fail after the laptop address changes
 
-The address is included in the pinned TLS certificate. Generate new security material and rebuild/reinstall the app:
+Enter the new HTTPS address in the app and pair again. Compare the new six-digit code and approve the request on the laptop. The APK does not need to be rebuilt or reinstalled.
 
-```bash
-SENSOR_CLOUD_IP=NEW_LAPTOP_IP ./setup-security.command --force
-```
-
-Replace `NEW_LAPTOP_IP` with the new address. Then repeat the Android build and installation steps and use the new address in the app.
+Use `./setup-security.command --force` only when you intentionally replace the laptop certificate. Every phone must pair again after the certificate changes.
 
 ### Camera images are dark or unavailable
 
@@ -405,8 +415,9 @@ To build the Android app again, repeat step 5 for Windows or Linux.
 
 ## Important security rules
 
-- Do not commit the TLS private key, AES key, generated APK, sensor recordings, photos, or packet captures.
+- Do not commit the TLS private key, paired-phone AES keys, sensor recordings, photos, or packet captures.
 - Do not expose the laptop server port directly to the public internet.
-- Regenerating the certificate or AES key requires rebuilding and reinstalling the Android app.
+- Approve a phone only when the six-digit code on the phone exactly matches the laptop dashboard.
+- Replacing the laptop certificate requires phones to pair again, but the APK does not need to be rebuilt.
 - The app does not use an upload token. Keep the server on a trusted local network.
-- A shared AES key embedded in an APK can be recovered by someone who obtains the APK. For deployment to multiple untrusted phones, use unique per-device keys or mutual TLS authentication.
+- Every approved phone receives a different AES key; no shared AES key is embedded in the APK.
