@@ -68,6 +68,7 @@ function sendSse(response, event, value) {
 export function createSensorCloudServer(options = {}) {
   const dataDirectory = path.resolve(options.dataDirectory || './data');
   const publicDirectory = path.resolve(options.publicDirectory || PUBLIC_DIRECTORY);
+  const apkPath = options.apkPath ? path.resolve(options.apkPath) : null;
   const telemetryDirectory = path.join(dataDirectory, 'telemetry');
   const frameDirectory = path.join(dataDirectory, 'frames');
   const photoDirectory = path.join(dataDirectory, 'photos');
@@ -225,6 +226,26 @@ export function createSensorCloudServer(options = {}) {
     }
   }
 
+  async function serveApk(response) {
+    if (!apkPath) return jsonResponse(response, 404, { error: 'Android APK has not been configured' });
+    try {
+      const content = await readFile(apkPath);
+      response.writeHead(200, {
+        'Cache-Control': 'no-store',
+        'Content-Disposition': 'attachment; filename="LocalSensorCloud-debug.apk"',
+        'Content-Length': content.length,
+        'Content-Type': 'application/vnd.android.package-archive',
+        'X-Content-Type-Options': 'nosniff'
+      });
+      response.end(content);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      jsonResponse(response, 404, {
+        error: 'Android APK not found. Build it with Gradle before downloading.'
+      });
+    }
+  }
+
   const requestListener = async (request, response) => {
     response.setHeader('Access-Control-Allow-Origin', '*');
     if (options.tls) response.setHeader('Strict-Transport-Security', 'max-age=31536000');
@@ -319,6 +340,9 @@ export function createSensorCloudServer(options = {}) {
         if (initial) sendSse(response, 'telemetry', initial);
         request.on('close', () => sseClients.delete(client));
         return;
+      }
+      if (request.method === 'GET' && url.pathname === '/app-debug.apk') {
+        return await serveApk(response);
       }
       if (request.method === 'GET') return await serveStatic(response, url.pathname);
       jsonResponse(response, 404, { error: 'Not found' });

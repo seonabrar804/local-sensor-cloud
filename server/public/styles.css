@@ -20,6 +20,8 @@ main { width: min(1480px, calc(100% - 40px)); margin: 24px auto 48px; }
 .toolbar { padding: 14px 18px; display: flex; align-items: center; gap: 14px; }
 .toolbar label { color: #95a59a; font-size: 13px; }
 select { appearance: none; min-width: min(300px, 40vw); padding: 10px 38px 10px 13px; color: #f2faf4; background: #18241d; border: 1px solid #35463b; border-radius: 10px; font: inherit; font-size: 13px; }
+.download-apk { padding: 10px 13px; color: #09100d; background: #79e29f; border-radius: 10px; font-size: 12px; font-weight: 750; text-decoration: none; white-space: nowrap; }
+.download-apk:hover { background: #95efb4; }
 .last-seen { margin-left: auto; color: #7e8d83; font-size: 12px; }
 .last-seen strong { color: #bdc9c0; font-weight: 600; }
 .overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(270px, .72fr); gap: 18px; margin-top: 18px; }

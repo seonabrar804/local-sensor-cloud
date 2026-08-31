@@ -270,6 +270,21 @@ If Android Studio was installed in another directory, change `JAVA_HOME` to its 
 
 ### 6. Install the app on the phone
 
+Choose either direct download or USB installation.
+
+#### Direct download from the laptop
+
+This is the easiest method when the phone and laptop are on the same Wi-Fi network:
+
+1. Start the laptop server as shown in step 7.
+2. On the phone, open `https://LAPTOP_IP:8787` in a browser, replacing `LAPTOP_IP` with the address found in step 3.
+3. Tap **Download Android APK** on the dashboard. The direct download address is `https://LAPTOP_IP:8787/app-debug.apk`.
+4. Open the downloaded `LocalSensorCloud-debug.apk` and allow installation from the browser when Android asks.
+
+The APK is generated specifically for the laptop's pinned certificate and AES key, so it is intentionally not published as a reusable GitHub download. The laptop serves it over the encrypted local connection instead. Only download it while connected to your own trusted laptop and network.
+
+#### Install with USB and ADB
+
 Enable **Developer options** and **USB debugging** on the Android phone, connect it by USB, accept the authorization message, and run:
 
 ```bash
@@ -277,7 +292,7 @@ adb devices
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Alternatively, copy the APK to the phone, open it, and allow installation from that file source when Android asks.
+You can also copy `android/app/build/outputs/apk/debug/app-debug.apk` to the phone manually, open it, and allow installation from that file source when Android asks.
 
 ### 7. Start the laptop server
 

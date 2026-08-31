@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createCipheriv } from 'node:crypto';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -112,6 +112,21 @@ test('JPEG frames are stored and returned', async t => {
   assert.deepEqual(frontFrame, FRONT_JPEG);
   const backFrame = (await request(origin, '/api/frame/latest?deviceId=test-phone&camera=back')).body;
   assert.deepEqual(backFrame, TINY_JPEG);
+});
+
+test('built Android APK is available as a direct download', async t => {
+  const dataDirectory = await mkdtemp(path.join(tmpdir(), 'sensor-cloud-apk-test-'));
+  const apkPath = path.join(dataDirectory, 'app-debug.apk');
+  const apk = Buffer.from('test Android package');
+  await writeFile(apkPath, apk);
+  const { cloud, origin } = await startCloud({ apkPath });
+  t.after(() => cloud.close());
+
+  const response = await request(origin, '/app-debug.apk');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers['content-type'], 'application/vnd.android.package-archive');
+  assert.equal(response.headers['content-disposition'], 'attachment; filename="LocalSensorCloud-debug.apk"');
+  assert.deepEqual(response.body, apk);
 });
 
 test('AES-GCM uploads are decrypted and plaintext or tampering is rejected', async t => {
