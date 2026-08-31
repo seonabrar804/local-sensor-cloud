@@ -17,6 +17,17 @@ The laptop acts as the cloud server. It decrypts and stores the uploads, then pr
 
 ## Security
 
+### Basic terms
+
+- **Encryption** changes readable data into unreadable data. **Decryption** changes it back. A **key** is a secret value used to perform these operations.
+- **TLS (Transport Layer Security)** is the security system used by HTTPS. It creates an encrypted connection between two devices, so someone observing the network cannot read the exchanged data. It also uses a certificate to identify the server.
+- **Certificate pinning** means the Android app contains the expected laptop certificate. The app refuses the connection if another server presents a different certificate.
+- **AES-GCM (Advanced Encryption Standard in Galois/Counter Mode)** is a method for encrypting a message with a shared secret key. AES hides the message, while GCM adds a check that detects whether anyone changed it. The app uses a new random value for every upload so identical data does not produce identical encrypted output.
+
+TLS and AES-GCM both use encryption, but at different places. TLS creates a protected connection, while application-level AES-GCM protects the sensor data and images themselves before they enter that connection.
+
+### Protection layers
+
 The app uses three security layers, and each one protects a different part of the data path:
 
 - **Wi-Fi layer — implemented by Android and the router or hotspot:** WPA protects radio traffic between the phone and the Wi-Fi access point. The app does not create this encryption; the Wi-Fi system provides it when the network is secured.
