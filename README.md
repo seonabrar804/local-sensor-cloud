@@ -1,141 +1,229 @@
 # Local Sensor Cloud
 
-This project turns an Android phone into a local sensor and camera node, with a laptop acting as the private cloud.
+Local Sensor Cloud turns an Android phone into a wireless sensing and camera device. The phone collects its available sensor measurements, noise level, battery and device information, and front/back camera images. It displays the live values on the phone and sends encrypted uploads over the local Wi-Fi network to a laptop.
 
-The Android app streams:
+The laptop acts as the cloud server. It decrypts and stores the uploads, then provides a browser dashboard with live sensor readings and camera feeds. No external cloud service or upload token is required.
 
-- live camera JPEG frames at up to 2 fps, displayed as MJPEG in the dashboard;
-- manually captured full frames saved as photos;
-- microphone noise level as relative dBFS (raw audio is never uploaded);
-- pressure in hPa when the phone has a barometer;
-- ambient temperature, light, humidity, acceleration, rotation, magnetic field, proximity, and every other available unprotected Android sensor;
-- phone model, Android version, battery, camera resolution, frame count, and upload errors.
+## What the final app does
 
-The app also shows a live on-phone measurements panel. Noise, pressure, and battery use compact summary tiles. Every active hardware sensor gets its own color-coded card with live values, unit, vendor/type, and accuracy. Cards are added and removed automatically as sensors become active or inactive, and values refresh approximately once per second even while the laptop is temporarily unreachable.
+- Discovers the sensors available on the phone and creates a live card for each one automatically.
+- Displays noise level, pressure, battery information, camera status, upload counts, and errors on the phone.
+- Captures the front and back cameras. Supported phones can use both concurrently; other phones alternate between them automatically.
+- Automatically uploads sensor data and photos at separate user-selected intervals in seconds or minutes.
+- Provides a manual photo-capture button for an immediate saved image.
+- Keeps sensor values updating locally even when the laptop cannot be reached.
+- Shows connected devices, measurements, and the latest camera images on the laptop dashboard.
+- Saves telemetry as JSONL and camera images as JPEG files on the laptop.
 
-Version 1.2 includes an on-phone camera preview. A continuously drained YUV preview stream drives camera auto-exposure and autofocus, while separate JPEG captures are shown in the app and sent to the laptop; this prevents dark frames on devices that do not meter exposure during JPEG-only capture.
+## Security
 
-Version 1.3 captures both front and back cameras. Phones advertising concurrent-camera support stream them simultaneously. Other phones automatically alternate cameras approximately every 6.5 seconds, because Android hardware permits only one open camera; the latest image from each side remains visible in the app and dashboard. Each feed is stored independently using `-front` or `-back` filenames.
+Data is protected in layers:
 
-Version 1.6 adds an automatic upload schedule. Sensor data and front/back photos have independent interval controls: enter a whole number and tap the unit button to switch between seconds and minutes. Sensor cards continue refreshing locally about once per second even when network uploads are much less frequent. Automatic photos are saved in `server/data/photos/`; the manual **Capture photo** button remains available for immediate captures. Stop streaming before changing a schedule, then start again to apply it.
+1. The Wi-Fi network protects the wireless link when its router or hotspot uses WPA security.
+2. Certificate-pinned TLS encrypts the complete connection between the Android app and the laptop and verifies the laptop's identity.
+3. Application-level AES-GCM encrypts every telemetry upload and JPEG before it enters the TLS connection. The laptop authenticates and decrypts it after receipt.
 
-Version 1.7 adds authenticated application-level encryption. Before upload, the Android app encrypts every telemetry packet and JPEG with AES-256-GCM using a fresh random 96-bit nonce. The laptop authenticates and decrypts the payload before processing it, and rejects plaintext, modified ciphertext, or an incorrect key. This sits inside the existing certificate-pinned TLS connection.
+The generated TLS private key and AES key stay outside Git. The matching public certificate and AES key are copied into the Android app during local setup, so the APK must be rebuilt whenever the keys or laptop certificate change.
 
-The laptop receiver has no npm dependencies. It uses Node.js built-ins, stores telemetry as daily JSONL files, and serves a real-time browser dashboard.
+## Start from scratch
 
-## 1. Start the laptop cloud
+### 1. Install the required tools
 
-Requirements: Node.js 20 or newer. The supplied laptop already has a suitable version.
+Install these on the laptop:
 
-After cloning the repository for the first time, generate laptop-specific TLS and AES keys, then rebuild the Android APK:
+- Git
+- Node.js and npm
+- Android Studio with the Android SDK
+- ADB, which is included with the Android SDK Platform Tools
+- OpenSSL
+
+On macOS, Android Studio provides a suitable Java runtime for the Android build. If `java` is not available in Terminal, the build command below points Gradle to Android Studio's bundled runtime.
+
+### 2. Download the project
+
+Open Terminal and run:
+
+```bash
+git clone https://github.com/seonabrar804/local-sensor-cloud.git
+cd local-sensor-cloud
+chmod +x setup-security.command start-server.command android/gradlew
+```
+
+### 3. Find the laptop's local address
+
+The phone and laptop must be on the same Wi-Fi network.
+
+On macOS:
+
+```bash
+ipconfig getifaddr en0
+```
+
+If that prints nothing, open **System Settings → Wi-Fi → Details** and copy the IP address. On Windows, run `ipconfig` and find the Wi-Fi adapter's IPv4 address. On Linux, run `hostname -I`.
+
+The address normally looks similar to `192.168.1.20`. It can change when the laptop joins another network.
+
+### 4. Generate security keys for this laptop
+
+On macOS or Linux, run:
 
 ```bash
 ./setup-security.command
+```
+
+The script detects the laptop address, creates the TLS certificate and private key, creates the AES key, and copies the required certificate and key material into the Android project.
+
+If automatic address detection fails, supply the address explicitly:
+
+```bash
+SENSOR_CLOUD_IP=192.168.1.20 ./setup-security.command
+```
+
+Replace `192.168.1.20` with the laptop's actual address. Do not share or commit files from `server/keys/`, the TLS private key, or the generated Android AES-key resource.
+
+### 5. Build the Android app
+
+Run:
+
+```bash
+cd android
+JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew assembleDebug
+cd ..
+```
+
+The generated APK is:
+
+```text
+android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+If Java is already configured, `./gradlew assembleDebug` is sufficient. You can also open the `android` directory in Android Studio and build the app there.
+
+### 6. Install the app on the phone
+
+Enable **Developer options** and **USB debugging** on the Android phone, connect it by USB, accept the authorization message, and run:
+
+```bash
+adb devices
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Alternatively, copy the APK to the phone, open it, and allow installation from that file source when Android asks.
+
+### 7. Start the laptop server
+
+From the project directory, run:
+
+```bash
+./start-server.command
+```
+
+Leave that Terminal window open. On the laptop, visit:
+
+```text
+https://localhost:8787
+```
+
+The browser may warn about a self-signed certificate because it was created locally rather than by a public certificate authority. Proceed only when you are using the certificate generated by this project.
+
+If the firewall asks whether Node.js may accept incoming connections, allow it on the local network.
+
+### 8. Connect the Android app
+
+1. Confirm that the phone and laptop are connected to the same Wi-Fi network.
+2. Open **Local Sensor Cloud** on the phone and grant the requested camera, microphone, and notification permissions.
+3. Enter the laptop URL using the address from step 3, for example `https://192.168.1.20:8787`.
+4. Select sensor-data and automatic-photo intervals. Each interval can use seconds or minutes.
+5. Tap **Start streaming**.
+6. Open the laptop dashboard and wait for the first scheduled upload.
+
+The app obtains the phone model, Android information, battery status, sensors, and camera capabilities directly from the phone. Nothing needs to be entered manually except the laptop address and upload intervals.
+
+## Using the app
+
+- **Start streaming** opens the available sensors, microphone, and cameras and starts scheduled encrypted uploads.
+- **Capture photo** saves the next camera image immediately on the laptop.
+- **Stop** closes the active sensors, microphone, cameras, and background service.
+- Sensor cards appear automatically according to the hardware available on the phone.
+- A missing pressure, temperature, humidity, or other reading usually means the phone does not contain that physical sensor.
+
+The noise value is a relative digital microphone level. It is not a calibrated sound-pressure measurement unless the phone is calibrated against a known meter.
+
+## Stored data
+
+The laptop creates the following directories while the server runs:
+
+```text
+server/data/
+├── telemetry/   daily JSONL sensor logs
+├── frames/      latest image from each camera
+└── photos/      timestamped automatic and manual photos
+```
+
+Each telemetry line is standalone JSON and can later be loaded into Python, a spreadsheet, a database, or another analysis tool.
+
+## Confirming encryption with Wireshark
+
+Start a Wireshark capture on the laptop's active Wi-Fi interface and use this display filter:
+
+```text
+tcp.port == 8787
+```
+
+Wireshark should identify the connection as TLS and show the uploads as encrypted application data. It can still display addresses, ports, timing, and packet sizes, but it should not display readable sensor values or JPEG contents. WPA encryption is normally removed by the Wi-Fi hardware before packets reach a normal laptop capture, and the inner AES-GCM payload remains hidden inside TLS.
+
+## Troubleshooting
+
+### The app cannot connect
+
+- Confirm that the server is still running and the laptop URL is correct.
+- Confirm that both devices are on the same network.
+- Avoid guest Wi-Fi networks that isolate connected devices.
+- Allow incoming Node.js connections through the laptop firewall.
+- Open the dashboard locally to confirm the server started successfully.
+
+### Uploads fail after the laptop address changes
+
+The address is included in the pinned TLS certificate. Generate new security material and rebuild/reinstall the app:
+
+```bash
+SENSOR_CLOUD_IP=NEW_LAPTOP_IP ./setup-security.command --force
 cd android
 JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew assembleDebug
 ```
 
-Private keys, captured sensor data, packet captures, build output, and the generated APK are intentionally excluded from Git. Never commit them. The public certificate is safe to commit, but `setup-security.command` replaces it with one matching the new laptop and copies it into the Android project.
+Then reinstall the new APK and use the new address in the app.
 
-In Terminal:
+### Camera images are dark or unavailable
 
-```bash
-cd server
-npm start
-```
+- Grant camera permission and stop/start streaming again.
+- Keep the lenses uncovered and allow a moment for exposure adjustment.
+- Some phones cannot open both cameras simultaneously; the app alternates between them automatically.
 
-Leave the terminal open, then open [https://localhost:8787](https://localhost:8787) on the laptop. The browser may display a warning because this is a private self-signed certificate; verify the SHA-256 fingerprint below before proceeding.
+### A sensor card is missing
 
-Find the laptop's local Wi-Fi address:
+Android can only report hardware physically present in the phone. A missing sensor is expected and does not indicate an upload failure.
 
-- macOS: System Settings → Wi-Fi → Details → IP Address, or run `ipconfig getifaddr en0`
-- Windows: run `ipconfig` and use the Wi-Fi adapter's IPv4 Address
-- Linux: run `hostname -I`
+## Test commands
 
-For this laptop, enter `https://192.168.10.104:8787` on the phone. The app pins the laptop certificate, so a network attacker cannot substitute another server even if the Wi-Fi address later changes.
-
-## 2. Install the Android app
-
-The ready-to-install APK is `LocalSensorCloud-debug.apk` in this folder. Either copy it to the phone and open it, or enable USB debugging and run:
-
-```bash
-adb install -r LocalSensorCloud-debug.apk
-```
-
-Android may ask you to allow installation from the file-sharing app or browser used to open the APK. The complete Android Studio project is in `android/`.
-
-## 3. Connect the phone
-
-1. Put the phone and laptop on the same Wi-Fi network.
-2. Open **Local Sensor Cloud** on the phone.
-3. Replace the example server URL with the laptop URL from step 1.
-4. Choose separate sensor-data and automatic-photo intervals. Tap each unit button to select seconds or minutes.
-5. Tap **Start streaming** and allow the requested permissions.
-6. Return to the laptop dashboard. The phone appears after the first selected data-upload interval.
-
-Use **Capture photo** in the app to preserve the next camera frame. **Stop** closes the camera, microphone, sensors, and background service.
-
-## Storage
-
-Runtime data is created below `server/data/`:
-
-```text
-server/data/
-├── telemetry/   daily YYYY-MM-DD.jsonl logs
-├── frames/      latest JPEG for each device
-└── photos/      timestamped, manually captured JPEGs
-```
-
-Every telemetry line is standalone JSON and can be imported into Python, pandas, a database, or another analytics tool later.
-
-## Configuration
-
-The server reads these optional environment variables:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `SENSOR_CLOUD_HOST` | `0.0.0.0` | Network interface to listen on |
-| `SENSOR_CLOUD_PORT` | `8787` | HTTPS port |
-| `SENSOR_CLOUD_DATA` | `server/data` | Storage directory |
-| `SENSOR_CLOUD_CERT` | `server/tls/server-cert.pem` | TLS certificate path |
-| `SENSOR_CLOUD_KEY` | `server/tls/server-key.pem` | TLS private-key path |
-| `SENSOR_CLOUD_APP_KEY` | `server/keys/application-aes.key` | 32-byte AES-256-GCM application key path |
-
-The upload API is intentionally simple:
-
-- `POST /api/telemetry` — JSON telemetry
-- `POST /api/frame?deviceId=...&camera=front|back` — JPEG frame
-- `GET /api/devices`, `/api/latest`, and `/api/history` — dashboard data
-- `GET /api/video.mjpeg` — live browser camera stream
-- `GET /events` — Server-Sent Events for live telemetry
-
-## Build and test
-
-Laptop receiver:
+Test the laptop receiver:
 
 ```bash
 cd server
 npm test
 ```
 
-Android app (macOS, with Android Studio installed):
+Build the Android app again:
 
 ```bash
 cd android
 JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew assembleDebug
 ```
 
-The generated APK is `android/app/build/outputs/apk/debug/app-debug.apk`.
+## Important security rules
 
-## Practical notes
-
-- Many phones do not contain a barometer or ambient-temperature sensor. Missing hardware is shown as `—`; it is not an app error.
-- dBFS is a relative digital sound level. Calibrated dBA requires calibration against a known sound-level meter and phone-specific microphone compensation.
-- The foreground notification is required by Android to keep camera and microphone capture active when the screen is off.
-- Some guest Wi-Fi networks isolate devices from each other. Use a normal home/office network or the laptop's hotspot if the phone cannot reach the dashboard.
-- Allow incoming Node.js connections if the laptop firewall asks.
-- Version 1.5 requires HTTPS. TLS 1.2 or 1.3 encrypts and authenticates every telemetry, camera, dashboard, SSE, and MJPEG connection. The Android app trusts only the bundled laptop certificate (SHA-256 `09:43:0D:CF:CF:96:8E:80:C6:AB:E5:9E:E9:FC:8D:F9:8F:A3:1A:E5:22:4C:65:A9:59:6B:99:30:8A:61:5F:57`). Data is raw only inside the phone and laptop endpoints; network observers see encrypted TLS records.
-- Version 1.7 additionally encrypts upload bodies with AES-256-GCM. The binary envelope is `LSC1 || 12-byte nonce || ciphertext || 16-byte authentication tag`; the complete request path is authenticated as additional data. The server refuses unencrypted or tampered uploads.
-- The laptop private key is `server/tls/server-key.pem`, protected with owner-only filesystem permissions. Never copy or publish it. Replacing the certificate requires rebuilding the Android APK with the new public certificate so the pin remains valid.
-- The application key is `server/keys/application-aes.key`, also protected with owner-only permissions. A matching copy is bundled in this APK. Replacing it requires rebuilding the APK. Because an APK can be reverse-engineered, this shared key adds payload confidentiality and integrity but is not a strong identity for an individual phone; use mutual TLS for per-phone authorization.
-- No token is required, so TLS protects confidentiality, integrity, and laptop identity but does not authenticate which LAN device is uploading. Keep the server on a trusted local network and do not expose port 8787 to the public internet.
+- Do not commit the TLS private key, AES key, generated APK, sensor recordings, photos, or packet captures.
+- Do not expose the laptop server port directly to the public internet.
+- Regenerating the certificate or AES key requires rebuilding and reinstalling the Android app.
+- The app does not use an upload token. Keep the server on a trusted local network.
+- A shared AES key embedded in an APK can be recovered by someone who obtains the APK. For deployment to multiple untrusted phones, use unique per-device keys or mutual TLS authentication.
