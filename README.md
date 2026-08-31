@@ -4,7 +4,7 @@ Local Sensor Cloud turns an Android phone into a wireless sensing and camera dev
 
 The laptop acts as the cloud server. It decrypts and stores the uploads, then provides a browser dashboard with live sensor readings and camera feeds. No external cloud service or upload token is required.
 
-## What the final app does
+## What the app does
 
 - Discovers the sensors available on the phone and creates a live card for each one automatically.
 - Displays noise level, pressure, battery information, camera status, upload counts, and errors on the phone.
@@ -17,11 +17,13 @@ The laptop acts as the cloud server. It decrypts and stores the uploads, then pr
 
 ## Security
 
-Data is protected in layers:
+The app uses three security layers, and each one protects a different part of the data path:
 
-1. The Wi-Fi network protects the wireless link when its router or hotspot uses WPA security.
-2. Certificate-pinned TLS encrypts the complete connection between the Android app and the laptop and verifies the laptop's identity.
-3. Application-level AES-GCM encrypts every telemetry upload and JPEG before it enters the TLS connection. The laptop authenticates and decrypts it after receipt.
+- **Wi-Fi layer — implemented by Android and the router or hotspot:** WPA protects radio traffic between the phone and the Wi-Fi access point. The app does not create this encryption; the Wi-Fi system provides it when the network is secured.
+- **Connection layer — implemented by TLS in the Android app and laptop server:** TLS encrypts everything travelling between the app and laptop. Certificate pinning also lets the app confirm that it connected to the correct laptop.
+- **Data layer — implemented by AES-GCM inside the Android app and laptop server:** The app encrypts each sensor upload and camera image before sending it. The laptop checks and decrypts the data after receiving it, so modified data is rejected.
+
+In simple terms, AES-GCM protects the actual sensor data and images, TLS protects their complete phone-to-laptop journey, and WPA protects the wireless part of that journey.
 
 The generated TLS private key and AES key stay outside Git. The matching public certificate and AES key are copied into the Android app during local setup, so the APK must be rebuilt whenever the keys or laptop certificate change.
 
