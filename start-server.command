@@ -1,7 +1,7 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 set -e
 
-PROJECT_DIRECTORY="${0:A:h}"
+PROJECT_DIRECTORY="$(cd -- "$(dirname -- "$0")" && pwd)"
 cd "$PROJECT_DIRECTORY/server"
 
 echo "Starting the private laptop cloud with TLS + AES-256-GCM."

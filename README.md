@@ -42,19 +42,98 @@ The generated TLS private key and AES key stay outside Git. The matching public 
 
 ### 1. Install the required tools
 
-Install these on the laptop:
+The project needs Git, Node.js with npm, Android Studio, ADB, and OpenSSL. Follow the section for your laptop's operating system.
 
-- Git
-- Node.js and npm
-- Android Studio with the Android SDK
-- ADB, which is included with the Android SDK Platform Tools
-- OpenSSL
+#### Windows
 
-On macOS, Android Studio provides a suitable Java runtime for the Android build. If `java` is not available in Terminal, the build command below points Gradle to Android Studio's bundled runtime.
+1. Open **PowerShell**. Use these commands to install Git, Node.js, and Android Studio with Windows Package Manager:
+
+   ```powershell
+   winget install --id Git.Git -e --source winget
+   winget install --id OpenJS.NodeJS.LTS -e --source winget
+   winget install --id Google.AndroidStudio -e --source winget
+   ```
+
+   If `winget` is unavailable, use the official [Git](https://git-scm.com/install/windows), [Node.js](https://nodejs.org/en/download), and [Android Studio](https://developer.android.com/studio/install) installers instead.
+
+2. Start Android Studio and complete its Setup Wizard. On the welcome screen, select **More Actions → SDK Manager → SDK Tools**, enable **Android SDK Platform-Tools**, and select **Apply**. Platform-Tools contains ADB.
+
+3. Open **Git Bash**, which was installed with Git. Add ADB to its command path:
+
+   ```bash
+   echo 'export PATH="$PATH:/c/Users/$USERNAME/AppData/Local/Android/Sdk/platform-tools"' >> ~/.bashrc
+   source ~/.bashrc
+   ```
+
+   Git Bash includes OpenSSL and will be used for the remaining Windows commands in this guide.
+
+4. Confirm that all tools are available:
+
+   ```bash
+   git --version
+   node --version
+   npm --version
+   adb --version
+   openssl version
+   ```
+
+   If ADB cannot detect the phone later, install the phone manufacturer's USB driver as described in the [Android hardware-device guide](https://developer.android.com/studio/run/device).
+
+#### Linux
+
+For Ubuntu or Debian, open a terminal and run:
+
+```bash
+sudo apt update
+sudo apt install -y git nodejs npm openssl unzip android-sdk-platform-tools-common
+```
+
+For Fedora, run:
+
+```bash
+sudo dnf install -y git nodejs npm openssl unzip android-tools
+```
+
+Download Android Studio from the official [Android Studio installation page](https://developer.android.com/studio/install). After downloading the Linux archive, install and open it with:
+
+```bash
+cd ~/Downloads
+tar -xzf android-studio-*-linux.tar.gz
+sudo mv android-studio /opt/
+/opt/android-studio/bin/studio
+```
+
+Complete the Android Studio Setup Wizard. Then select **More Actions → SDK Manager → SDK Tools**, enable **Android SDK Platform-Tools**, and select **Apply**.
+
+Add the Android SDK and ADB to the command path:
+
+```bash
+echo 'export ANDROID_HOME="$HOME/Android/Sdk"' >> ~/.bashrc
+echo 'export PATH="$PATH:$ANDROID_HOME/platform-tools"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+On Ubuntu or Debian, allow the current user to access Android USB devices, then log out and back in:
+
+```bash
+sudo usermod -aG plugdev "$LOGNAME"
+```
+
+Confirm that all tools are available:
+
+```bash
+git --version
+node --version
+npm --version
+adb --version
+openssl version
+```
+
+The official [Android Platform-Tools page](https://developer.android.com/tools/releases/platform-tools) also provides separate ADB downloads for Windows and Linux.
 
 ### 2. Download the project
 
-Open Terminal and run:
+On Windows, open Git Bash. On Linux, open a terminal. Then run:
 
 ```bash
 git clone https://github.com/seonabrar804/local-sensor-cloud.git
@@ -66,41 +145,59 @@ chmod +x setup-security.command start-server.command android/gradlew
 
 The phone and laptop must be on the same Wi-Fi network.
 
-On macOS:
+On Windows, open PowerShell and run:
 
-```bash
-ipconfig getifaddr en0
+```powershell
+ipconfig
 ```
 
-If that prints nothing, open **System Settings → Wi-Fi → Details** and copy the IP address. On Windows, run `ipconfig` and find the Wi-Fi adapter's IPv4 address. On Linux, run `hostname -I`.
+Find the active Wi-Fi adapter and copy its **IPv4 Address**.
+
+On Linux, run:
+
+```bash
+hostname -I
+```
+
+Use the first local address printed for the active network connection.
 
 The address normally looks similar to `192.168.1.20`. It can change when the laptop joins another network.
 
 ### 4. Generate security keys for this laptop
 
-On macOS or Linux, run:
+On Windows, use Git Bash and supply the laptop address found in the previous step:
 
 ```bash
-./setup-security.command
+SENSOR_CLOUD_IP=192.168.1.20 bash setup-security.command
 ```
 
-The script detects the laptop address, creates the TLS certificate and private key, creates the AES key, and copies the required certificate and key material into the Android project.
-
-If automatic address detection fails, supply the address explicitly:
+On Linux, run:
 
 ```bash
 SENSOR_CLOUD_IP=192.168.1.20 ./setup-security.command
 ```
 
-Replace `192.168.1.20` with the laptop's actual address. Do not share or commit files from `server/keys/`, the TLS private key, or the generated Android AES-key resource.
+Replace `192.168.1.20` with the laptop's actual address. The script creates the TLS certificate and private key, creates the AES key, and copies the required certificate and key material into the Android project.
+
+Do not share or commit files from `server/keys/`, the TLS private key, or the generated Android AES-key resource.
 
 ### 5. Build the Android app
 
-Run:
+On Windows, run these commands in Git Bash:
 
 ```bash
 cd android
-JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew assembleDebug
+export JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"
+./gradlew.bat assembleDebug
+cd ..
+```
+
+On Linux, run:
+
+```bash
+cd android
+export JAVA_HOME=/opt/android-studio/jbr
+./gradlew assembleDebug
 cd ..
 ```
 
@@ -110,7 +207,7 @@ The generated APK is:
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-If Java is already configured, `./gradlew assembleDebug` is sufficient. You can also open the `android` directory in Android Studio and build the app there.
+If Android Studio was installed in another directory, change `JAVA_HOME` to its `jbr` directory. If Java is already configured, setting `JAVA_HOME` is unnecessary. You can also open the `android` directory in Android Studio and build the app there.
 
 ### 6. Install the app on the phone
 
@@ -125,7 +222,13 @@ Alternatively, copy the APK to the phone, open it, and allow installation from t
 
 ### 7. Start the laptop server
 
-From the project directory, run:
+On Windows, run this from the project directory in Git Bash:
+
+```bash
+bash start-server.command
+```
+
+On Linux, run:
 
 ```bash
 ./start-server.command
@@ -201,11 +304,9 @@ The address is included in the pinned TLS certificate. Generate new security mat
 
 ```bash
 SENSOR_CLOUD_IP=NEW_LAPTOP_IP ./setup-security.command --force
-cd android
-JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew assembleDebug
 ```
 
-Then reinstall the new APK and use the new address in the app.
+Replace `NEW_LAPTOP_IP` with the new address. Then repeat the Android build and installation steps and use the new address in the app.
 
 ### Camera images are dark or unavailable
 
@@ -226,12 +327,7 @@ cd server
 npm test
 ```
 
-Build the Android app again:
-
-```bash
-cd android
-JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew assembleDebug
-```
+To build the Android app again, repeat step 5 for Windows or Linux.
 
 ## Important security rules
 

@@ -1,7 +1,7 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIRECTORY="${0:A:h}"
+PROJECT_DIRECTORY="$(cd -- "$(dirname -- "$0")" && pwd)"
 FORCE="${1:-}"
 TLS_KEY="$PROJECT_DIRECTORY/server/tls/server-key.pem"
 TLS_CERT="$PROJECT_DIRECTORY/server/tls/server-cert.pem"
