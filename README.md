@@ -376,6 +376,24 @@ tcp.port == 8787
 
 Wireshark should identify the connection as TLS and show the uploads as encrypted application data. It can still display addresses, ports, timing, and packet sizes, but it should not display readable sensor values or JPEG contents. WPA encryption is normally removed by the Wi-Fi hardware before packets reach a normal laptop capture, and the inner AES-GCM payload remains hidden inside TLS.
 
+### Verified security evidence
+
+The security path was checked with a controlled upload through an isolated temporary server. The temporary server used port `8799`; the normal app continues to use port `8787`. No TLS decryption keys, paired-phone keys, packet captures, or test records are stored in this repository.
+
+| Security layer | Verification result |
+| --- | --- |
+| Wi-Fi link | macOS reported the active Wi-Fi connection as `WPA2_PSK`, confirming that link-layer encryption was enabled by the access point. This setting belongs to the Wi-Fi network, not the Android app. |
+| Pinned TLS | The capture showed TLS application data rather than readable HTTP, sensor JSON, or images. The pairing and upload tests also reject unapproved devices. |
+| Application AES-GCM | Temporary TLS test keys were loaded into Wireshark so the outer HTTP request could be inspected. Even then, the telemetry body remained an opaque 210-byte `LSC2` AES-GCM envelope. The server accepted it with HTTP `202` only after authenticated decryption; tampered ciphertext is rejected by the automated tests. |
+
+The normal network view below shows TLS-protected application data. The bytes pane does not contain readable telemetry.
+
+![Wireshark showing TLS application data on the wire](docs/security/tls-on-wire.png)
+
+The second view deliberately decrypts only the outer TLS layer using temporary test keys. Wireshark can then identify `POST /api/telemetry`, but the inner payload is still shown as opaque `Data (210 bytes)` because AES-GCM protects the application data separately. The `202 Accepted` response confirms that the server authenticated and decrypted the envelope.
+
+![Wireshark showing an AES-GCM payload remaining opaque after TLS decryption](docs/security/aes-gcm-inside-tls.png)
+
 ## Troubleshooting
 
 ### The app cannot connect
