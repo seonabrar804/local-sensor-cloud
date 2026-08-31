@@ -79,6 +79,48 @@ The project needs Git, Node.js with npm, Android Studio, ADB, and OpenSSL. Follo
 
    If ADB cannot detect the phone later, install the phone manufacturer's USB driver as described in the [Android hardware-device guide](https://developer.android.com/studio/run/device).
 
+#### macOS
+
+1. Open **Terminal** and install Apple's command-line tools:
+
+   ```bash
+   xcode-select --install
+   ```
+
+2. Install [Homebrew](https://brew.sh/), then follow the **Next steps** printed by its installer so the `brew` command is added to the shell path:
+
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+
+3. Close and reopen Terminal. Install Git, Node.js, OpenSSL, and Android Studio:
+
+   ```bash
+   brew install git node openssl@3
+   brew install --cask android-studio
+   ```
+
+   Android Studio can also be installed from the official [Android Studio installation page](https://developer.android.com/studio/install). Open it and complete the Setup Wizard. Then select **More Actions → SDK Manager → SDK Tools**, enable **Android SDK Platform-Tools**, and select **Apply**. Platform-Tools contains ADB.
+
+4. Add Homebrew OpenSSL and ADB to the command path:
+
+   ```bash
+   echo 'export PATH="$(brew --prefix openssl@3)/bin:$PATH"' >> ~/.zshrc
+   echo 'export ANDROID_HOME="$HOME/Library/Android/sdk"' >> ~/.zshrc
+   echo 'export PATH="$PATH:$ANDROID_HOME/platform-tools"' >> ~/.zshrc
+   source ~/.zshrc
+   ```
+
+5. Confirm that all tools are available:
+
+   ```bash
+   git --version
+   node --version
+   npm --version
+   adb --version
+   openssl version
+   ```
+
 #### Linux
 
 For Ubuntu or Debian, open a terminal and run:
@@ -129,11 +171,11 @@ adb --version
 openssl version
 ```
 
-The official [Android Platform-Tools page](https://developer.android.com/tools/releases/platform-tools) also provides separate ADB downloads for Windows and Linux.
+The official [Android Platform-Tools page](https://developer.android.com/tools/releases/platform-tools) also provides separate ADB downloads for Windows, macOS, and Linux.
 
 ### 2. Download the project
 
-On Windows, open Git Bash. On Linux, open a terminal. Then run:
+On Windows, open Git Bash. On macOS or Linux, open a terminal. Then run:
 
 ```bash
 git clone https://github.com/seonabrar804/local-sensor-cloud.git
@@ -153,6 +195,14 @@ ipconfig
 
 Find the active Wi-Fi adapter and copy its **IPv4 Address**.
 
+On macOS, run:
+
+```bash
+ipconfig getifaddr en0
+```
+
+If that prints nothing, open **System Settings → Wi-Fi → Details** and copy the IP address.
+
 On Linux, run:
 
 ```bash
@@ -171,7 +221,7 @@ On Windows, use Git Bash and supply the laptop address found in the previous ste
 SENSOR_CLOUD_IP=192.168.1.20 bash setup-security.command
 ```
 
-On Linux, run:
+On macOS or Linux, run:
 
 ```bash
 SENSOR_CLOUD_IP=192.168.1.20 ./setup-security.command
@@ -189,6 +239,15 @@ On Windows, run these commands in Git Bash:
 cd android
 export JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"
 ./gradlew.bat assembleDebug
+cd ..
+```
+
+On macOS, run:
+
+```bash
+cd android
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+./gradlew assembleDebug
 cd ..
 ```
 
@@ -228,13 +287,13 @@ On Windows, run this from the project directory in Git Bash:
 bash start-server.command
 ```
 
-On Linux, run:
+On macOS or Linux, run:
 
 ```bash
 ./start-server.command
 ```
 
-Leave that Terminal window open. On the laptop, visit:
+Leave that terminal window open. On the laptop, visit:
 
 ```text
 https://localhost:8787
