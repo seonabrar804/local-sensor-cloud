@@ -15,6 +15,9 @@ The laptop acts as the cloud server. It decrypts and stores the uploads, then pr
 - Shows connected devices, measurements, and the latest camera images on the laptop dashboard.
 - Saves telemetry as JSONL and camera images as JPEG files on the laptop.
 
+<details>
+<summary><strong>Security: Wi-Fi, pinned TLS and AES-GCM</strong></summary>
+
 ## Security
 
 ### Basic terms
@@ -37,6 +40,11 @@ The app uses three security layers, and each one protects a different part of th
 In simple terms, AES-GCM protects the actual sensor data and images, TLS protects their complete phone-to-laptop journey, and WPA protects the wireless part of that journey.
 
 The APK is general: the same app can connect to different laptops. It contains no laptop certificate and no shared upload key. During first-time pairing, the laptop displays a connection request and both screens display a six-digit code. When the user verifies that the codes match and chooses **Approve**, the app pins that laptop's certificate and receives a new AES key created only for that phone. Android protects the saved key with its system keystore, and the laptop keeps its paired-phone keys outside Git.
+
+</details>
+
+<details>
+<summary><strong>Complete installation and setup guide</strong></summary>
 
 ## Start from scratch
 
@@ -343,6 +351,11 @@ No sensor, microphone, or camera capture starts before the laptop approves the p
 
 The same APK can pair with another laptop later. Run that laptop's server, enter its HTTPS address, and repeat the code comparison and approval. Pairings are saved separately for each laptop address and phone ID.
 
+</details>
+
+<details>
+<summary><strong>How to use the Android app</strong></summary>
+
 ## Using the app
 
 - **Start streaming** opens the available sensors, microphone, and cameras and starts scheduled encrypted uploads.
@@ -352,6 +365,11 @@ The same APK can pair with another laptop later. Run that laptop's server, enter
 - A missing pressure, temperature, humidity, or other reading usually means the phone does not contain that physical sensor.
 
 The noise value is a relative digital microphone level. It is not a calibrated sound-pressure measurement unless the phone is calibrated against a known meter.
+
+</details>
+
+<details>
+<summary><strong>Where sensor data and photos are stored</strong></summary>
 
 ## Stored data
 
@@ -365,6 +383,11 @@ server/data/
 ```
 
 Each telemetry line is standalone JSON and can later be loaded into Python, a spreadsheet, a database, or another analysis tool.
+
+</details>
+
+<details>
+<summary><strong>Wireshark encryption checks and screenshots</strong></summary>
 
 ## Confirming encryption with Wireshark
 
@@ -394,6 +417,11 @@ The second view deliberately decrypts only the outer TLS layer using temporary t
 
 ![Wireshark showing an AES-GCM payload remaining opaque after TLS decryption](docs/security/aes-gcm-inside-tls.png)
 
+</details>
+
+<details>
+<summary><strong>Troubleshooting</strong></summary>
+
 ## Troubleshooting
 
 ### The app cannot connect
@@ -420,6 +448,11 @@ Use `./setup-security.command --force` only when you intentionally replace the l
 
 Android can only report hardware physically present in the phone. A missing sensor is expected and does not indicate an upload failure.
 
+</details>
+
+<details>
+<summary><strong>Developer test commands</strong></summary>
+
 ## Test commands
 
 Test the laptop receiver:
@@ -431,6 +464,11 @@ npm test
 
 To build the Android app again, repeat step 5 for Windows or Linux.
 
+</details>
+
+<details>
+<summary><strong>Important security rules</strong></summary>
+
 ## Important security rules
 
 - Do not commit the TLS private key, paired-phone AES keys, sensor recordings, photos, or packet captures.
@@ -439,3 +477,5 @@ To build the Android app again, repeat step 5 for Windows or Linux.
 - Replacing the laptop certificate requires phones to pair again, but the APK does not need to be rebuilt.
 - The app does not use an upload token. Keep the server on a trusted local network.
 - Every approved phone receives a different AES key; no shared AES key is embedded in the APK.
+
+</details>
