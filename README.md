@@ -358,8 +358,11 @@ The same APK can pair with another laptop later. Run that laptop's server, enter
 
 ## Using the app
 
+- Before tapping **Start streaming**, set separate intervals for **Sensor data** and **Automatic photos**. Enter a number and select **seconds** or **minutes** for each one.
+- The sensor-data interval controls how often one complete sensor packet is uploaded. The photo interval controls how often front and back camera images are captured and uploaded automatically.
+- Sensor cards continue updating live on the phone between uploads. To change an interval while streaming, tap **Stop**, change the value or unit, and tap **Start streaming** again.
 - **Start streaming** opens the available sensors, microphone, and cameras and starts scheduled encrypted uploads.
-- **Capture photo** saves the next camera image immediately on the laptop.
+- **Capture photo** saves the next camera image immediately on the laptop without waiting for the automatic-photo interval.
 - **Stop** closes the active sensors, microphone, cameras, and background service.
 - Sensor cards appear automatically according to the hardware available on the phone.
 - A missing pressure, temperature, humidity, or other reading usually means the phone does not contain that physical sensor.
