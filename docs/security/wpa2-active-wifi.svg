@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="820" viewBox="0 0 1600 820" role="img" aria-labelledby="title description">
+  <title id="title">Active Wi-Fi WPA2 security verification</title>
+  <desc id="description">A terminal transcript showing an active Wi-Fi interface protected by WPA2 PSK.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07110c"/>
+      <stop offset="1" stop-color="#10251a"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="820" fill="url(#background)"/>
+  <rect x="90" y="70" width="1420" height="680" rx="22" fill="#101713" stroke="#34443a" stroke-width="2" filter="url(#shadow)"/>
+  <path d="M90 132h1420" stroke="#34443a" stroke-width="2"/>
+  <circle cx="132" cy="101" r="11" fill="#ff665f"/>
+  <circle cx="169" cy="101" r="11" fill="#f5bd4f"/>
+  <circle cx="206" cy="101" r="11" fill="#62c554"/>
+  <text x="250" y="110" fill="#aab8af" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="25">Terminal — WPA2 verification</text>
+
+  <text x="145" y="195" fill="#79e29f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="27" font-weight="700">$ ipconfig getsummary en0 | egrep \</text>
+  <text x="145" y="238" fill="#79e29f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="27" font-weight="700">  'InterfaceType|LinkStatusActive|Security'</text>
+
+  <text x="145" y="325" fill="#dbe6de" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="31">InterfaceType      : WiFi</text>
+  <text x="145" y="380" fill="#dbe6de" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="31">LinkStatusActive   : TRUE</text>
+  <text x="145" y="435" fill="#dbe6de" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="31">Security           : <tspan fill="#79e29f" font-weight="700">WPA2_PSK</tspan></text>
+
+  <rect x="145" y="495" width="1310" height="170" rx="16" fill="#142c1d" stroke="#3b7750" stroke-width="2"/>
+  <text x="190" y="545" fill="#79e29f" font-family="Inter, system-ui, sans-serif" font-size="26" font-weight="750">PASS — Layer 1 is active</text>
+  <text x="190" y="590" fill="#b3c2b8" font-family="Inter, system-ui, sans-serif" font-size="23">WPA2 encrypts Wi-Fi frames between this laptop</text>
+  <text x="190" y="625" fill="#b3c2b8" font-family="Inter, system-ui, sans-serif" font-size="23">and the access point.</text>
+  <text x="145" y="715" fill="#728078" font-family="Inter, system-ui, sans-serif" font-size="20">Actual macOS command output. Network name and hardware</text>
+  <text x="145" y="744" fill="#728078" font-family="Inter, system-ui, sans-serif" font-size="20">addresses are intentionally omitted.</text>
+</svg>

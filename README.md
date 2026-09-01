@@ -389,33 +389,148 @@ Each telemetry line is standalone JSON and can later be loaded into Python, a sp
 <details>
 <summary><strong>Wireshark encryption checks and screenshots</strong></summary>
 
-## Confirming encryption with Wireshark
+## Confirming all three security layers
 
-Start a Wireshark capture on the laptop's active Wi-Fi interface and use this display filter:
+The normal app server uses TCP port `8787`. The screenshots below were produced with a controlled, isolated copy of the server on port `8799`, so the test traffic could not be confused with normal uploads. When checking the real app, use `8787` in every filter.
+
+No TLS keys, AES keys, packet captures, sensor records, or photos from these checks are stored in this repository.
+
+| Layer | Protects | Verified result |
+| --- | --- | --- |
+| 1. WPA2/WPA3 Wi-Fi | Radio frames between each device and the access point | The active Wi-Fi connection reported `WPA2_PSK`. |
+| 2. Certificate-pinned TLS | The complete connection between the Android app and laptop | Wireshark showed TLS application data and no readable telemetry. |
+| 3. Application AES-GCM | Each telemetry body and JPEG before it enters TLS | After decrypting only TLS, the 210-byte `LSC2` body remained unreadable; the server returned `202 Accepted` only after successful AES-GCM authentication. |
+
+### Before capturing
+
+Start the laptop server and begin streaming from the phone. In Wireshark, select the laptop's active Wi-Fi interface. A **capture filter** reduces what is recorded, while a **display filter** controls what is shown after capture.
+
+Optional capture filter:
 
 ```text
-tcp.port == 8787
+tcp port 8787
 ```
 
-Wireshark should identify the connection as TLS and show the uploads as encrypted application data. It can still display addresses, ports, timing, and packet sizes, but it should not display readable sensor values or JPEG contents. WPA encryption is normally removed by the Wi-Fi hardware before packets reach a normal laptop capture, and the inner AES-GCM payload remains hidden inside TLS.
+The equivalent command-line capture is:
 
-### Verified security evidence
+```bash
+tshark -D
+tshark -i <interface-number> -f "tcp port 8787" -w security-check.pcapng
+```
 
-The security path was checked with a controlled upload through an isolated temporary server. The temporary server used port `8799`; the normal app continues to use port `8787`. No TLS decryption keys, paired-phone keys, packet captures, or test records are stored in this repository.
+Use the interface number printed by `tshark -D`. Administrator/root permission may be required for packet capture. Stop the command with <kbd>Ctrl</kbd>+<kbd>C</kbd> after the phone has uploaded data.
 
-| Security layer | Verification result |
-| --- | --- |
-| Wi-Fi link | macOS reported the active Wi-Fi connection as `WPA2_PSK`, confirming that link-layer encryption was enabled by the access point. This setting belongs to the Wi-Fi network, not the Android app. |
-| Pinned TLS | The capture showed TLS application data rather than readable HTTP, sensor JSON, or images. The pairing and upload tests also reject unapproved devices. |
-| Application AES-GCM | Temporary TLS test keys were loaded into Wireshark so the outer HTTP request could be inspected. Even then, the telemetry body remained an opaque 210-byte `LSC2` AES-GCM envelope. The server accepted it with HTTP `202` only after authenticated decryption; tampered ciphertext is rejected by the automated tests. |
+### Layer 1 — WPA2/WPA3 Wi-Fi link encryption
 
-The normal network view below shows TLS-protected application data. The bytes pane does not contain readable telemetry.
+WPA2 or WPA3 is provided by the router or hotspot and the phone/laptop Wi-Fi systems, not by this Android app. It encrypts wireless frames only while they travel between a device and the access point. It does not replace TLS or AES-GCM.
+
+Ordinary Wireshark captures on a laptop receive packets after the Wi-Fi adapter has already removed WPA encryption. Therefore, use the operating system to confirm the active network's security mode.
+
+On macOS:
+
+```bash
+ipconfig getsummary en0 | egrep 'InterfaceType|LinkStatusActive|Security'
+```
+
+On Windows PowerShell:
+
+```powershell
+netsh wlan show interfaces
+```
+
+Look for `State : connected` and an `Authentication` value such as `WPA2-Personal` or `WPA3-Personal`.
+
+On Linux with NetworkManager:
+
+```bash
+nmcli -t -f ACTIVE,SSID,SECURITY device wifi list | grep '^yes:'
+```
+
+The macOS check used for this project returned an active Wi-Fi interface with `Security : WPA2_PSK`:
+
+![Terminal showing that the active Wi-Fi connection uses WPA2 PSK](docs/security/wpa2-active-wifi.png)
+
+This verifies layer 1 for the tested network. A different laptop or Wi-Fi network must be checked again because the app cannot enable WPA2/WPA3 by itself.
+
+### Layer 2 — certificate-pinned TLS connection encryption
+
+TLS is the outer HTTPS connection. It hides the HTTP request, sensor values, image contents, and the inner AES-GCM envelope from someone observing the network. Certificate pinning is an additional identity check in the Android app: after approved pairing, the app accepts only the certificate it saved for that laptop address.
+
+Paste this **display filter** into Wireshark's green filter bar:
+
+```text
+tls.app_data && tcp.port == 8787
+```
+
+The command-line equivalent is:
+
+```bash
+tshark -r security-check.pcapng \
+  -Y 'tls.app_data && tcp.port == 8787' \
+  -T fields -e frame.number -e _ws.col.Protocol -e _ws.col.Info
+```
+
+Expected result: Wireshark reports TLS `Application Data`; it does not show readable JSON, sensor values, or JPEG bytes. IP addresses, TCP ports, timing, and packet sizes remain visible because the network needs them to deliver the packets.
+
+The controlled screenshot uses the same filter with test port `8799`:
 
 ![Wireshark showing TLS application data on the wire](docs/security/tls-on-wire.png)
 
-The second view deliberately decrypts only the outer TLS layer using temporary test keys. Wireshark can then identify `POST /api/telemetry`, but the inner payload is still shown as opaque `Data (210 bytes)` because AES-GCM protects the application data separately. The `202 Accepted` response confirms that the server authenticated and decrypted the envelope.
+Wireshark proves that TLS protects the traffic. Packet capture alone cannot prove certificate pinning because pinning is the Android app's certificate decision. The app's pairing flow performs that check, and the automated server tests confirm that unapproved devices are rejected.
 
-![Wireshark showing an AES-GCM payload remaining opaque after TLS decryption](docs/security/aes-gcm-inside-tls.png)
+### Layer 3 — AES-GCM application encryption
+
+Before an upload enters TLS, the app encrypts the telemetry or JPEG with that phone's AES-256-GCM key. The binary envelope begins with the four-byte marker `LSC2`, followed by a nonce, ciphertext, and an authentication tag. The marker identifies the format; the actual data remains unreadable.
+
+The Android app intentionally does not export TLS session keys. To demonstrate the inner layer safely, the screenshot used a controlled test client and temporary TLS session keys. Those keys were loaded in **Wireshark → Settings/Preferences → Protocols → TLS → (Pre)-Master-Secret log filename**, then deleted after the test. Never save or commit TLS or AES keys.
+
+After loading temporary TLS keys, use this **display filter** to show telemetry requests whose decrypted HTTP body starts with `LSC2` (`4c:53:43:32` in hexadecimal):
+
+```text
+http.request.uri == "/api/telemetry" && http.file_data[0:4] == 4c:53:43:32
+```
+
+Use this filter to show successful authenticated uploads:
+
+```text
+http.response.code == 202 && http.request.uri == "/api/telemetry"
+```
+
+To show both in one view:
+
+```text
+(http.request.uri == "/api/telemetry" && http.file_data[0:4] == 4c:53:43:32) || (http.response.code == 202 && http.request.uri == "/api/telemetry")
+```
+
+The command-line equivalent, when a temporary TLS key log is available, is:
+
+```bash
+tshark -o "tls.keylog_file:/path/to/tls.keys" \
+  -r security-check.pcapng \
+  -Y 'http.request.uri == "/api/telemetry" && http.file_data[0:4] == 4c:53:43:32' \
+  -T fields -e frame.number -e http.request.method -e http.request.uri \
+  -e http.content_length -e http.file_data
+
+tshark -o "tls.keylog_file:/path/to/tls.keys" \
+  -r security-check.pcapng \
+  -Y 'http.response.code == 202 && http.request.uri == "/api/telemetry"' \
+  -T fields -e frame.number -e http.response.code -e http.response.phrase
+```
+
+Expected result: Wireshark can now identify `POST /api/telemetry`, but its `Data (210 bytes)` body still looks random apart from the `LSC2` marker. Wireshark cannot turn that body into sensor JSON because it does not have the phone's application AES key. The laptop server verifies the GCM authentication tag, decrypts the upload, and returns HTTP `202 Accepted`. If any encrypted byte or the authentication tag is changed, decryption fails and the upload is rejected.
+
+![Wireshark showing an AES-GCM payload remaining opaque after TLS decryption and a 202 Accepted response](docs/security/aes-gcm-inside-tls.png)
+
+The screenshot uses test port `8799`; for the normal app use `8787` in the filters above. The exact filters were also verified with TShark: frame 65 contained a 210-byte body beginning `4c534332` (`LSC2`), and frame 69 contained `202 Accepted`.
+
+Run the automated authentication and tamper checks from the repository:
+
+```bash
+cd server
+npm test
+```
+
+These tests check approved-device encryption, rejection of plaintext uploads, rejection of a different device identity, and rejection of modified AES-GCM ciphertext.
 
 </details>
 
